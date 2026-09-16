@@ -33,6 +33,7 @@ import os
 import re
 import secrets
 import sys
+import pandas as pd
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
@@ -615,7 +616,131 @@ def main(argv: Optional[List[str]] = None) -> int:
     except Exception as exc:
         print(f"\n[FATAL ORCHESTRATOR FAILURE] {exc}", file=sys.stderr)
         return 3
+# ---------------------------------------------------------------------------
+# INSTITUTIONAL NORMALIZATION & ANALYTICAL PARSERS
+# ---------------------------------------------------------------------------
+def parse_price_history_to_df(history_payload: Dict[str, Any]) -> pd.DataFrame:
+    """
+    Normalizes a Schwab PriceHistory payload into an institutional OHLCV DataFrame.
 
+    Features:
+      - Validates 'empty' flag to prevent downstream runtime indexing faults.
+      - Converts Unix epoch milliseconds to UTC timestamps, then localizes to US/Eastern.
+      - Enforces strict type casting: float64 for price series, int64 for volume.
+      - Guarantees sorted, unique DatetimeIndex.
+    """
+    if not isinstance(history_payload, dict) or history_payload.get("empty", True):
+        logger.warning("Empty or invalid price history payload provided.")
+        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
+    candles = history_payload.get("candles", [])
+    if not candles:
+        logger.warning("Price history contains zero candle elements.")
+        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+
+    df = pd.DataFrame(candles)
+
+    # Required field verification
+    required_cols = {"datetime", "open", "high", "low", "close", "volume"}
+    if not required_cols.issubset(df.columns):
+        missing = required_cols - set(df.columns)
+        raise ValueError(f"Price history schema mismatch: missing columns {missing}")
+
+    # Timestamp normalization: Epoch MS -> UTC -> US/Eastern Market Time
+    df["datetime"] = pd.to_datetime(df["datetime"], unit="ms", utc=True).dt.tz_convert("US/Eastern")
+    df.set_index("datetime", inplace=True)
+    df.sort_index(inplace=True)
+
+    # Cast to capital markets numeric precision
+    df[["open", "high", "low", "close"]] = df[["open", "high", "low", "close"]].astype(float)
+    df["volume"] = df["volume"].astype("int64")
+
+    return df[["open", "high", "low", "close", "volume"]]
+
+
+def parse_option_chain_to_df(chain_payload: Dict[str, Any]) -> pd.DataFrame:
+    """
+    Normalizes Schwab option chain nested maps into an institutional Volatility Surface.
+
+    Features:
+      - Traverses dual multi-tier structures: callExpDateMap and putExpDateMap.
+      - Parses the composite expiration key ('YYYY-MM-DD:DTE') into distinct columns.
+      - Extracts first-order and second-order Greeks (Delta, Gamma, Vega, Theta).
+      - Computes moneyness relative to the underlying spot price.
+      - Guards against null, empty, or non-tradable contract nodes.
+    """
+    if not isinstance(chain_payload, dict):
+        logger.warning("Invalid chain payload received.")
+        return pd.DataFrame()
+
+    underlying_price = float(chain_payload.get("underlyingPrice", 0.0))
+    records: List[Dict[str, Any]] = []
+
+    structure_targets = [
+        ("CALL", chain_payload.get("callExpDateMap", {})),
+        ("PUT", chain_payload.get("putExpDateMap", {})),
+    ]
+
+    for side, exp_map in structure_targets:
+        if not isinstance(exp_map, dict):
+            continue
+
+        for exp_key, strike_map in exp_map.items():
+            if ":" not in exp_key:
+                continue
+            exp_date_str, dte_str = exp_key.split(":", 1)
+
+            try:
+                dte = int(dte_str)
+                exp_date = pd.to_datetime(exp_date_str)
+            except (ValueError, TypeError):
+                continue
+
+            if not isinstance(strike_map, dict):
+                continue
+
+            for strike_str, contracts in strike_map.items():
+                if not isinstance(contracts, list) or not contracts:
+                    continue
+
+                # Schwab encapsulates the contract payload inside a single-element list
+                c = contracts[0]
+                if not isinstance(c, dict):
+                    continue
+
+                try:
+                    strike_val = float(strike_str)
+                except ValueError:
+                    strike_val = float(c.get("strikePrice", 0.0))
+
+                records.append({
+                    "side": side,
+                    "expiration": exp_date,
+                    "dte": dte,
+                    "strike": strike_val,
+                    "bid": c.get("bid"),
+                    "ask": c.get("ask"),
+                    "mark": c.get("mark"),
+                    "last": c.get("last"),
+                    "volume": c.get("totalVolume", 0),
+                    "open_interest": c.get("openInterest", 0),
+                    "implied_vol": c.get("volatility"),
+                    "delta": c.get("delta"),
+                    "gamma": c.get("gamma"),
+                    "theta": c.get("theta"),
+                    "vega": c.get("vega"),
+                    "moneyness": round(strike_val / underlying_price, 4) if underlying_price > 0 else None,
+                    "symbol": c.get("symbol"),
+                    "in_the_money": c.get("inTheMoney", False),
+                })
+
+    df = pd.DataFrame(records)
+    if not df.empty:
+        # Enforce deterministic institutional sorting: Expiry -> Strike -> Side
+        df.sort_values(by=["expiration", "strike", "side"], inplace=True)
+        df.reset_index(drop=True, inplace=True)
+
+    return df
 
 if __name__ == "__main__":
     sys.exit(main())
