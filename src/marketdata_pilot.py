@@ -1,16 +1,23 @@
 """
 marketdata_pilot.py
 -----------------------------------------------------------------------------
-Institutional-Grade Orchestrator for Schwab Market Data Pipeline.
+Institutional-Grade Schwab Market Data Orchestrator & Audit Pipeline.
 
-Security & Architectural Guarantees:
-- Zero Secret Pollution: Never modifies global process environment (os.environ).
-- Masked Secret Input: Uses getpass to prevent shoulder surfing and DOM leakage.
-- Precise Error Disambiguation: Differentiates between authentication failures
-  (which trigger re-auth) and business/network errors (which fail fast).
-- Cross-Platform Path Isolation: Dynamically anchors token stores to Google Drive
-  (in Colab) or secure OS user home directories with POSIX 0o700 isolation.
-- Deterministic Resource Cleanup: Enforces context-managed HTTP session teardown.
+Designed for: Global Equity Strategy, Market Risk Systems, and Automated Pipelines.
+
+Key Capabilities:
+1. Zero Process Pollution: Credentials are held strictly in localized call frames;
+   secrets are never written back to `os.environ` or printed to process tables.
+2. Dual-Tier OAuth Protocol:
+   - Tier 1: Proactive & reactive silent token refreshing (30-min window).
+   - Tier 2: Deterministic OAuth flow restart on token revocation, technical failures,
+     CAG/LMS scope modifications, or administrative override (`force_reauth=True`).
+3. Precision Failure Boundary: Differentiates between authentication failures
+   (triggering OAuth re-handshake) and gateway/asset failures (failing fast).
+4. Multi-Tenant Secure Storage: Token caches are isolated under strict POSIX file masks
+   (0o600 file / 0o700 directory) to prevent cross-container or local snooping.
+5. Agnostic Audit Engine: Provides complete 7-endpoint inspection across equities,
+   ETFs, mutual funds, and benchmark indices.
 -----------------------------------------------------------------------------
 """
 
@@ -29,49 +36,69 @@ from typing import Any, Callable, Dict, List, Optional, Union
 # ---------------------------------------------------------------------------
 # PATH RESOLUTION & SAFE IMPORT GUARD
 # ---------------------------------------------------------------------------
-PROJECT_SRC = Path(__file__).resolve().parent if "__file__" in locals() else Path("/content/schwab-marketdata-pilot/src")
+PROJECT_SRC = (
+    Path(__file__).resolve().parent
+    if "__file__" in locals()
+    else Path("/content/schwab-marketdata-pilot/src")
+)
 if str(PROJECT_SRC) not in sys.path:
-    sys.path.append(str(PROJECT_SRC))
+    sys.path.insert(0, str(PROJECT_SRC))
 
 try:
-    from schwab_client import APIRequestError, SchwabClient, SchwabClientError, TokenError
+    from schwab_client import (
+        APIRequestError,
+        SchwabClient,
+        SchwabClientError,
+        TokenError,
+    )
 except ImportError as exc:
-    raise ImportError(f"FATAL: Unable to load hardened SchwabClient from '{PROJECT_SRC}': {exc}") from exc
+    raise ImportError(
+        f"FATAL: Unable to load SchwabClient from '{PROJECT_SRC}'. "
+        f"Verify file placement and sys.path. Detail: {exc}"
+    ) from exc
 
-# Application logger configuration
-logger = logging.getLogger("marketdata_orchestrator")
+# Module-level logger (configured with NullHandler for library usage)
+logger = logging.getLogger("schwab_orchestrator")
 logger.addHandler(logging.NullHandler())
 
-# Strict ticker symbol regex (handles equities, ETFs, and indices with $, ., or /)
-SYMBOL_REGEX = re.compile(r"^[$A-Z0-9./\-_]{1,14}$")
+# Strict symbol regex supporting equities, multi-class shares, and indices
+# Examples: AAPL, BRK.B, BF/B, SPY, $SPX, $COMPX, $DJI
+SYMBOL_REGEX = re.compile(r"^[\$A-Z0-9.\-_/]{1,15}$")
 
 
 # ---------------------------------------------------------------------------
-# DATA STRUCTURES & CUSTOM EXCEPTIONS
+# STRUCTURED DATA MODELS & EXCEPTIONS
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class RunResult:
-    """Immutable structured result returned by the orchestrator."""
+    """
+    Immutable execution contract returned by run_marketdata_flow.
+    Guarantees deterministic structure for downstream algorithmic consumption.
+    """
     success: bool
     symbol: str
     data: Optional[Dict[str, Any]] = None
     error_message: Optional[str] = None
     session_resumed: bool = False
+    forced_restart: bool = False
 
 
 class OrchestratorError(SchwabClientError):
-    """Base exception for pipeline orchestration failures."""
+    """Base exception for workflow orchestration failures."""
 
 
 class CredentialResolutionError(OrchestratorError):
-    """Raised when required credentials cannot be resolved securely."""
+    """Raised when authentication credentials cannot be securely located."""
 
 
 # ---------------------------------------------------------------------------
-# HARDENED CREDENTIAL RESOLUTION
+# SECURE CREDENTIAL RESOLUTION (ZERO-POLLUTION HIERARCHY)
 # ---------------------------------------------------------------------------
 def _get_colab_secret(key: str) -> Optional[str]:
-    """Retrieves secrets from Google Colab userdata vault without printing errors."""
+    """
+    Attempts extraction from Google Colab userdata secrets vault.
+    Returns None if not executing in Colab or if the key is unset.
+    """
     try:
         from google.colab import userdata  # type: ignore
         val = userdata.get(key)
@@ -89,33 +116,39 @@ def _resolve_credential(
     secret_provider: Optional[Callable[[str], Optional[str]]] = None,
 ) -> str:
     """
-    Resolves credentials deterministically through an enterprise precedence hierarchy.
-    Crucially, does NOT inject resolved secrets back into os.environ.
+    Resolves credentials via strict precedence:
+      1. Enterprise Secret Provider callback (HashiCorp Vault, AWS Secrets Manager)
+      2. Google Colab User Secrets Vault
+      3. OS Environment Variable (read-only; not modified)
+      4. Masked Interactive Prompt (terminal or notebook fallback)
+
+    Crucial Security Rule: Resolved values are NEVER injected back into `os.environ`
+    to prevent inspection via `/proc/<pid>/environ` or environment dumping.
     """
-    # 1. Enterprise secret manager callback
+    # 1. Enterprise secret provider
     if secret_provider:
         try:
             val = secret_provider(key)
             if val and val.strip():
                 return val.strip()
         except Exception as exc:
-            logger.debug("Enterprise secret provider failed for key '%s': %s", key, exc)
+            logger.debug("Enterprise secret provider failed for '%s': %s", key, exc)
 
-    # 2. Google Colab User Data Vault
+    # 2. Google Colab secrets
     colab_val = _get_colab_secret(key)
     if colab_val:
         return colab_val
 
-    # 3. Environment Variable (Read-only lookup)
+    # 3. Environment variable (read-only inspection)
     env_val = os.environ.get(key)
     if env_val and env_val.strip():
         return env_val.strip()
 
-    # 4. Interactive fallback with terminal masking
+    # 4. Interactive fallback
     if interactive:
         try:
             if is_secret:
-                # Suppress terminal echo to prevent credential exposure in logs/DOM
+                # Use getpass to suppress terminal echo and prevent DOM/log snooping
                 user_val = getpass.getpass(prompt=f"{prompt_label}: ").strip()
             else:
                 user_val = input(f"{prompt_label}: ").strip()
@@ -123,35 +156,35 @@ def _resolve_credential(
             if user_val:
                 return user_val
         except (EOFError, KeyboardInterrupt) as exc:
-            raise CredentialResolutionError(f"Interactive credential input aborted for '{key}'.") from exc
+            raise CredentialResolutionError(f"Interactive input aborted for '{key}'.") from exc
 
     raise CredentialResolutionError(
-        f"Required credential '{key}' could not be resolved. "
-        "Provide via Colab Secrets, environment variable, or secret provider."
+        f"Missing required credential '{key}'. Provide via Secret Manager, "
+        "Colab Secrets, environment variable, or interactive prompt."
     )
 
 
 # ---------------------------------------------------------------------------
-# SECURE STORAGE PATH RESOLUTION
+# SECURE STORAGE RESOLUTION
 # ---------------------------------------------------------------------------
 def resolve_secure_token_path() -> Path:
     """
-    Determines an isolated, permission-controlled path for token caching.
-    Enforces directory permission mask (0o700) on POSIX platforms.
+    Determines an isolated, permission-controlled path for token persistence.
+    Enforces POSIX 0o700 directory permissions to block cross-user inspection.
     """
     explicit_path = os.environ.get("SCHWAB_TOKEN_PATH")
     if explicit_path and explicit_path.strip():
         target = Path(explicit_path).expanduser().resolve()
     else:
-        # Check if Google Drive is mounted
+        # Check if Google Drive is mounted in Colab
         drive_dir = Path("/content/drive/MyDrive/Colab Notebooks/schwab_market_data")
         if drive_dir.exists() and drive_dir.is_dir():
             target = drive_dir / "schwab_token.json"
         else:
-            # Multi-platform local fallback: ~/.schwab/tokens.json
-            target = Path.home() / ".schwab" / "schwab_tokens.json"
+            # Multi-platform fallback under user home directory
+            target = Path.home() / ".schwab" / "schwab_token.json"
 
-    # Enforce owner-only directory permissions (rwx------)
+    # Enforce directory mask (rwx------)
     parent_dir = target.parent
     parent_dir.mkdir(parents=True, exist_ok=True)
     try:
@@ -163,47 +196,72 @@ def resolve_secure_token_path() -> Path:
 
 
 def _sanitize_and_validate_symbols(raw_symbol: Union[str, List[str]]) -> str:
-    """Validates ticker format to block injection and format anomalies."""
+    """
+    Validates and standardizes ticker formats against strict capital-market regex.
+    Prevents parameter injection, whitespace corruption, and malformed queries.
+    """
     if isinstance(raw_symbol, list):
-        candidates = [s.strip().upper() for s in raw_symbol if s and isinstance(s, str)]
+        candidates = [str(s).strip().upper() for s in raw_symbol if s]
     elif isinstance(raw_symbol, str):
         candidates = [s.strip().upper() for s in raw_symbol.split(",") if s.strip()]
     else:
-        raise ValueError("Symbol parameter must be a non-empty string or list of strings.")
+        raise ValueError("Symbol must be a non-empty string or list of strings.")
 
     if not candidates:
         raise ValueError("No valid symbols supplied after sanitization.")
 
     for sym in candidates:
         if not SYMBOL_REGEX.match(sym):
-            raise ValueError(f"Security validation failed: Symbol '{sym}' contains invalid characters.")
+            raise ValueError(
+                f"Security validation failed: Symbol '{sym}' contains illegal characters. "
+                "Must be alphanumeric or approved index/share delimiters ($, ., -, /)."
+            )
 
     return ",".join(candidates)
 
 
 # ---------------------------------------------------------------------------
-# PIPELINE ORCHESTRATOR
+# CORE WORKFLOW: MARKET DATA RETRIEVAL
 # ---------------------------------------------------------------------------
 def run_marketdata_flow(
     symbol: Union[str, List[str]] = "AAPL",
     *,
     interactive: bool = True,
+    force_reauth: bool = False,
     secret_provider: Optional[Callable[[str], Optional[str]]] = None,
     token_file_path: Optional[Union[str, Path]] = None,
     client_kwargs: Optional[Dict[str, Any]] = None,
 ) -> RunResult:
     """
-    Executes the market data retrieval lifecycle.
+    Executes the market data retrieval lifecycle with full dual-tier OAuth support.
 
-    Guarantees:
-    - Only token/auth exceptions fall back to browser authorization.
-    - Upstream network errors or invalid symbol queries fail fast.
-    - All network sessions are terminated deterministically.
+    Parameters:
+        symbol: Single ticker, list of tickers, or comma-delimited string.
+        interactive: If True, permits console/browser OAuth login if unauthenticated.
+        force_reauth: If True, purges cached tokens and executes a full OAuth restart.
+                     Required when modifying CAG account selections, altering scopes,
+                     updating 2FA credentials, or recovering from server-side revocations.
+        secret_provider: Optional enterprise secret manager callback: fn(key) -> str.
+        token_file_path: Explicit override for token JSON location.
+        client_kwargs: Additional configuration passed directly to SchwabClient.
+
+    Returns:
+        RunResult: Structured execution summary and market data payload.
     """
     validated_symbols = _sanitize_and_validate_symbols(symbol)
-    resolved_token_path = Path(token_file_path).resolve() if token_file_path else resolve_secure_token_path()
+    resolved_token_path = (
+        Path(token_file_path).resolve() if token_file_path else resolve_secure_token_path()
+    )
 
-    # Resolve credentials
+    # 1. Handle Administrative / Policy-Driven OAuth Restarts
+    if force_reauth and resolved_token_path.exists():
+        logger.info("force_reauth=True: Evicting cached token file at %s", resolved_token_path)
+        try:
+            resolved_token_path.unlink()
+        except OSError as exc:
+            logger.warning("Failed to evict cached token file: %s", exc)
+
+    # 2. Resolve Credentials
     client_id = _resolve_credential(
         "SCHWAB_CLIENT_ID",
         "Enter Schwab Client ID (App Key)",
@@ -222,7 +280,7 @@ def run_marketdata_flow(
 
     kwargs = client_kwargs.copy() if client_kwargs else {}
 
-    # Initialize client within context manager for deterministic socket teardown
+    # 3. Instantiate Hardened Client within Managed Socket Context
     with SchwabClient(
         client_id=client_id,
         client_secret=client_secret,
@@ -231,117 +289,350 @@ def run_marketdata_flow(
         **kwargs,
     ) as client:
 
-        # Step 1: Attempt execution via existing cached or refreshed session
-        try:
-            quote_payload = client.get_quotes(validated_symbols)
-            logger.info("Successfully fetched quotes for [%s] via cached credentials.", validated_symbols)
-            return RunResult(
-                success=True,
-                symbol=validated_symbols,
-                data=quote_payload,
-                session_resumed=True,
-            )
-        except TokenError as te:
-            logger.info("Cached token unavailable or expired: %s. Handshake required.", te)
-        except APIRequestError as ae:
-            # If rejected with 401 specifically, allow re-auth; all other errors must fail fast
-            if getattr(ae, "status_code", None) == 401:
-                logger.warning("Gateway returned HTTP 401 Unauthorized. Triggering interactive handshake.")
-            else:
-                logger.error("Upstream API failure for symbols [%s]: %s", validated_symbols, ae)
+        # Step A: Attempt execution using cached or silently refreshed session
+        if not force_reauth:
+            try:
+                quote_payload = client.get_quotes(validated_symbols)
+                logger.info("Successfully fetched quotes for [%s] via active session.", validated_symbols)
                 return RunResult(
-                    success=False,
+                    success=True,
                     symbol=validated_symbols,
-                    error_message=f"API request failure: {ae}",
+                    data=quote_payload,
+                    session_resumed=True,
+                    forced_restart=False,
                 )
+            except TokenError as te:
+                logger.info("Cached token invalid or refresh expired: %s. Initiating OAuth restart.", te)
+            except APIRequestError as ae:
+                # If rejected with HTTP 401, the gateway invalidated the token; proceed to restart.
+                # For any other HTTP error (400, 404, 500), fail fast to prevent bogus auth prompts.
+                if getattr(ae, "status_code", None) == 401:
+                    logger.warning("Gateway returned HTTP 401 Unauthorized. Forcing OAuth restart.")
+                else:
+                    logger.error("API gateway failure for [%s]: %s", validated_symbols, ae)
+                    return RunResult(
+                        success=False,
+                        symbol=validated_symbols,
+                        error_message=f"API Request Failure: {ae}",
+                        session_resumed=False,
+                        forced_restart=False,
+                    )
 
-        # Step 2: Fallback to manual authorization flow if interactive
+        # Step B: Full OAuth Flow Restart (CAG / LMS Consent Handshake)
         if not interactive:
-            err_msg = "Execution halted: Active session expired and interactive authorization is disabled."
+            err_msg = (
+                "Execution halted: Session expired or OAuth restart required, "
+                "but interactive authentication is disabled."
+            )
             logger.error(err_msg)
-            return RunResult(success=False, symbol=validated_symbols, error_message=err_msg)
+            return RunResult(
+                success=False,
+                symbol=validated_symbols,
+                error_message=err_msg,
+                session_resumed=False,
+                forced_restart=force_reauth,
+            )
 
         try:
             auth_url = client.build_auth_url()
-            print("\n" + "=" * 70)
-            print("SCHWAB OAUTH HANDSHAKE REQUIRED")
-            print("=" * 70)
-            print("1. Open this URL in your browser to authorize access:\n")
+            print("\n" + "=" * 78)
+            print("SCHWAB FULL OAUTH RESTART (LMS CONSENT & ACCOUNT SELECTION)")
+            print("=" * 78)
+            print("1. Open this URL in your browser to authorize application access:\n")
             print(auth_url)
-            print("\n2. Log in and paste the redirected URL (or code parameter) below:")
+            print("\n2. Log in, select/verify your accounts, and paste the redirected URL below.")
+            print("-" * 78)
 
             auth_code = input("\nPaste Redirect URL or Code: ").strip()
             if not auth_code:
-                raise OrchestratorError("No authorization code provided; workflow aborted.")
+                raise OrchestratorError("No authorization code provided. Workflow aborted.")
 
-            print("\nExchanging code for token payload...")
+            print("\nExchanging authorization code for token pair...")
             client.exchange_code_for_token(auth_code)
 
-            # Step 3: Execute query with freshly minted access token
+            # Step C: Retrieve Market Data with newly minted token
             quote_payload = client.get_quotes(validated_symbols)
             return RunResult(
                 success=True,
                 symbol=validated_symbols,
                 data=quote_payload,
                 session_resumed=False,
+                forced_restart=force_reauth,
             )
 
         except (TokenError, APIRequestError, OrchestratorError) as exc:
-            logger.error("Authentication handshake failed: %s", exc)
-            return RunResult(success=False, symbol=validated_symbols, error_message=str(exc))
+            logger.error("OAuth handshake failed: %s", exc)
+            return RunResult(
+                success=False,
+                symbol=validated_symbols,
+                error_message=str(exc),
+                session_resumed=False,
+                forced_restart=force_reauth,
+            )
         except Exception as exc:
-            logger.exception("Unexpected catastrophic error in authorization pipeline: %s", exc)
-            raise OrchestratorError(f"Handshake pipeline crashed: {exc}") from exc
+            logger.exception("Catastrophic error during OAuth handshake: %s", exc)
+            raise OrchestratorError(f"Handshake pipeline failure: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
-# CLI INTERFACE
+# AUDIT WORKFLOW: COMPREHENSIVE 7-ENDPOINT CATALOG
+# ---------------------------------------------------------------------------
+def run_full_marketdata_catalog(
+    symbol: str = "SPY",
+    benchmark_index: str = "$SPX",
+    *,
+    interactive: bool = True,
+    force_reauth: bool = False,
+    secret_provider: Optional[Callable[[str], Optional[str]]] = None,
+    token_file_path: Optional[Union[str, Path]] = None,
+    client_kwargs: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """
+    Audits and queries all 7 Schwab Market Data endpoint families for a given asset.
+    Handles non-optionable securities, indices, and structured assets gracefully.
+
+    Endpoint Coverage:
+      1. Quotes (NBBO, Last, Volume, Fundamentals)
+      2. PriceHistory (OHLCV multi-interval candles)
+      3. OptionChains (Strikes, Expiries, Greeks, Implied Volatility)
+      4. OptionExpirations (Calendar of active expiration dates)
+      5. Instruments (CUSIP, Exchange, Fundamental accounting metrics)
+      6. Movers (Index gainers, losers, and volume leaders)
+      7. MarketHours (Trading session windows across asset classes)
+    """
+    clean_symbol = symbol.strip().upper()
+    resolved_token_path = (
+        Path(token_file_path).resolve() if token_file_path else resolve_secure_token_path()
+    )
+
+    if force_reauth and resolved_token_path.exists():
+        logger.info("force_reauth=True: Evicting cached token file at %s", resolved_token_path)
+        try:
+            resolved_token_path.unlink()
+        except OSError as exc:
+            logger.warning("Failed to evict cached token file: %s", exc)
+
+    client_id = _resolve_credential(
+        "SCHWAB_CLIENT_ID",
+        "Enter Schwab Client ID",
+        is_secret=False,
+        interactive=interactive,
+        secret_provider=secret_provider,
+    )
+    client_secret = _resolve_credential(
+        "SCHWAB_CLIENT_SECRET",
+        "Enter Schwab Client Secret",
+        is_secret=True,
+        interactive=interactive,
+        secret_provider=secret_provider,
+    )
+    redirect_uri = os.environ.get("SCHWAB_REDIRECT_URI", "https://127.0.0.1")
+
+    kwargs = client_kwargs.copy() if client_kwargs else {}
+
+    with SchwabClient(
+        client_id=client_id,
+        client_secret=client_secret,
+        redirect_uri=redirect_uri,
+        token_file_path=resolved_token_path,
+        **kwargs,
+    ) as client:
+
+        # Verify authentication status
+        try:
+            client.get_valid_access_token()
+        except TokenError:
+            if not interactive:
+                raise OrchestratorError("Authentication missing and interactive mode is disabled.")
+            auth_url = client.build_auth_url()
+            print("\nAuthorization required. Complete consent flow:\n", auth_url)
+            auth_code = input("\nPaste Redirect URL or Code: ").strip()
+            client.exchange_code_for_token(auth_code)
+
+        print("\n" + "=" * 82)
+        print(f"SCHWAB MARKET DATA 7-ENDPOINT AUDIT SNAPSHOT: {clean_symbol}")
+        print("=" * 82)
+
+        # Audit Execution Plan
+        audit_plan = [
+            ("Quotes", lambda: client.get_quotes(clean_symbol)),
+            (
+                "PriceHistory",
+                lambda: client.get_price_history(
+                    clean_symbol,
+                    period_type="day",
+                    period=5,
+                    frequency_type="minute",
+                    frequency=30,
+                ),
+            ),
+            (
+                "OptionChains",
+                lambda: client.get_option_chain(clean_symbol, strike_count=4),
+            ),
+            (
+                "OptionExpirations",
+                lambda: client.get_option_expirations(clean_symbol),
+            ),
+            (
+                "Instruments",
+                lambda: client.get_instruments(clean_symbol, projection="fundamental"),
+            ),
+            (
+                "Movers",
+                lambda: client.get_movers(index_symbol=benchmark_index),
+            ),
+            (
+                "MarketHours",
+                lambda: client.get_market_hours("equity,option"),
+            ),
+        ]
+
+        snapshot: Dict[str, Any] = {"symbol": clean_symbol, "endpoints": {}}
+
+        print(f"{'Endpoint':<20} | {'Status':<10} | {'Summary Data Points'}")
+        print("-" * 82)
+
+        for endpoint_name, query_func in audit_plan:
+            try:
+                payload = query_func()
+                summary_text = ""
+
+                if endpoint_name == "Quotes":
+                    q = payload.get(clean_symbol, {}).get("quote", {})
+                    summary_text = f"Last: ${q.get('lastPrice', 'N/A')} | Vol: {q.get('totalVolume', 0):,}"
+                elif endpoint_name == "PriceHistory":
+                    candles = payload.get("candles", [])
+                    summary_text = f"{len(candles)} intraday 30-min candle bars returned"
+                elif endpoint_name == "OptionChains":
+                    call_map = payload.get("callExpDateMap", {})
+                    summary_text = f"Underlying: ${payload.get('underlyingPrice', 'N/A')} | Expiries: {len(call_map)}"
+                elif endpoint_name == "OptionExpirations":
+                    exps = payload.get("expirationList", [])
+                    summary_text = f"{len(exps)} active expiration cycles discovered"
+                elif endpoint_name == "Instruments":
+                    insts = payload.get("instruments", [])
+                    cusip = insts[0].get("cusip", "N/A") if insts else "N/A"
+                    summary_text = f"CUSIP: {cusip} | Records: {len(insts)}"
+                elif endpoint_name == "Movers":
+                    screeners = payload.get("screeners", [])
+                    summary_text = f"{len(screeners)} index mover securities ({benchmark_index})"
+                elif endpoint_name == "MarketHours":
+                    summary_text = f"Trading markets: {', '.join(payload.keys())}"
+
+                snapshot["endpoints"][endpoint_name] = {"available": True, "data": payload}
+                print(f"{endpoint_name:<20} | 200 OK     | {summary_text}")
+
+            except APIRequestError as err:
+                status_code = getattr(err, "status_code", "ERR")
+                snapshot["endpoints"][endpoint_name] = {"available": False, "error": str(err)}
+                print(f"{endpoint_name:<20} | HTTP {status_code:<4} | Request rejected: {err}")
+            except Exception as err:
+                snapshot["endpoints"][endpoint_name] = {"available": False, "error": str(err)}
+                print(f"{endpoint_name:<20} | FAILED     | {err}")
+
+        print("-" * 82 + "\n")
+        return snapshot
+
+
+# ---------------------------------------------------------------------------
+# CLI INTERFACE & AUTOMATION DISPATCHER
 # ---------------------------------------------------------------------------
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Institutional Charles Schwab Market Data Execution Engine",
+        description="Institutional Charles Schwab Market Data Orchestration Engine",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("symbol", nargs="?", default="SPY", help="Ticker symbol(s), comma-separated (e.g. AAPL,MSFT,NVDA)")
-    parser.add_argument("--non-interactive", action="store_true", help="Disallow manual browser login prompts")
-    parser.add_argument("--token-path", type=str, default=None, help="Explicit token storage file path")
-    parser.add_argument("--log-level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], default="INFO", help="Logging level")
+    parser.add_argument(
+        "symbol",
+        nargs="?",
+        default="SPY",
+        help="Ticker symbol(s), comma-separated (e.g. SPY or AAPL,MSFT,NVDA)",
+    )
+    parser.add_argument(
+        "--audit-catalog",
+        action="store_true",
+        help="Execute full 7-endpoint inspection audit instead of single quote query",
+    )
+    parser.add_argument(
+        "--benchmark",
+        type=str,
+        default="$SPX",
+        choices=["$SPX", "$COMPX", "$DJI"],
+        help="Benchmark index for market movers analysis",
+    )
+    parser.add_argument(
+        "--force-reauth",
+        action="store_true",
+        help="Evict cached token and execute full interactive OAuth restart",
+    )
+    parser.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help="Disable interactive login prompts (fails fast if session is expired)",
+    )
+    parser.add_argument(
+        "--token-path",
+        type=str,
+        default=None,
+        help="Explicit file path for reading and persisting tokens",
+    )
+    parser.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        default="INFO",
+        help="Application logging verbosity level",
+    )
     return parser
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    """CLI entrypoint conforming to standard POSIX exit status codes."""
+    """CLI execution entrypoint adhering to standard POSIX status codes."""
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
 
     logging.basicConfig(
         level=getattr(logging, args.log_level),
         format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
+        datefmt="%H:%M:%S",
     )
 
     try:
+        # Route 1: Comprehensive 7-Endpoint Audit Catalog
+        if args.audit_catalog:
+            run_full_marketdata_catalog(
+                symbol=args.symbol,
+                benchmark_index=args.benchmark,
+                interactive=not args.non_interactive,
+                force_reauth=args.force_reauth,
+                token_file_path=args.token_path,
+            )
+            return 0
+
+        # Route 2: Standard Production Market Data Pipeline
         res = run_marketdata_flow(
             symbol=args.symbol,
             interactive=not args.non_interactive,
+            force_reauth=args.force_reauth,
             token_file_path=args.token_path,
         )
 
         if res.success:
-            session_type = "Cached" if res.session_resumed else "Newly Authenticated"
-            print(f"\n[OK] Market data retrieved ({session_type}) for symbols: {res.symbol}")
+            session_state = "Resumed Active Session" if res.session_resumed else "Newly Authenticated"
+            print(f"\n[OK] Market data retrieved ({session_state}) for: {res.symbol}")
             if logger.isEnabledFor(logging.DEBUG) and res.data:
                 import json as _json
                 print(_json.dumps(res.data, indent=2))
             return 0
         else:
-            print(f"\n[ERROR] Pipeline failed: {res.error_message}", file=sys.stderr)
+            print(f"\n[ERROR] Pipeline failure: {res.error_message}", file=sys.stderr)
             return 1
 
     except CredentialResolutionError as exc:
-        print(f"\n[CREDENTIAL ERROR] {exc}", file=sys.stderr)
+        print(f"\n[CREDENTIAL CONFIGURATION ERROR] {exc}", file=sys.stderr)
         return 2
     except Exception as exc:
-        print(f"\n[FATAL SYSTEM ERROR] {exc}", file=sys.stderr)
+        print(f"\n[FATAL ORCHESTRATOR FAILURE] {exc}", file=sys.stderr)
         return 3
 
 
