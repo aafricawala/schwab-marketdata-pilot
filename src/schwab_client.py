@@ -3,30 +3,32 @@ schwab_client.py
 -----------------------------------------------------------------------------
 Institutional-Grade Charles Schwab OAuth2 & Market Data API Client.
 
-Designed for: Global Equity Strategy, Market Risk Systems, and Automated Pipelines.
+Designed for: Global Equity Strategy, Market Risk Systems, and Algorithmic Pipelines.
 
-Core Architecture & Security Assurances:
+Core Architecture & Security Features:
 1. Strict Callback URL Verification:
-   - Validates URI length (<= 256 characters per Schwab portal constraints).
-   - Enforces valid scheme declaration (HTTPS, HTTP, or custom URI schemes).
-   - Detects and rejects forbidden whitespace.
-   - Normalizes trailing slashes on bare host/IP roots (e.g. 'https://127.0.0.1/' -> 'https://127.0.0.1')
-     to prevent byte-mismatch 400 Bad Request errors.
-2. Low-Level Token Isolation:
-   - File creation uses POSIX open flags (O_CREAT | O_EXCL/O_TRUNC) with explicit
-     0o600 permissions at the kernel level, eliminating the umask race-condition window.
-3. High-Concurrency Thread Safety:
-   - Double-checked locking primitives prevent multi-threaded refresh stampedes while
-     optimizing fast-path reads for latency-sensitive execution engines.
-4. Resilient Network Layer:
+   - Enforces the 255-character maximum length limit mandated by Schwab.
+   - Strictly validates the HTTPS protocol requirement for Login Micro Site (LMS).
+   - Prohibits whitespace characters in callback definitions.
+   - Normalizes root-level trailing slashes (e.g., 'https://127.0.0.1/' -> 'https://127.0.0.1')
+     to prevent byte-level mismatch rejections during token exchange.
+2. CSRF Mitigation (RFC 6749 Section 10.12):
+   - Supports cryptographically random state tokens on authorization requests.
+   - Validates returned state tokens before code exchange to prevent CSRF attacks.
+3. Low-Level Token Isolation:
+   - Uses low-level OS file descriptors (os.open with O_CREAT | O_TRUNC | O_WRONLY)
+     to enforce strict POSIX 0o600 permissions at creation, preventing umask race conditions.
+4. Concurrency & Thread Safety:
+   - Implements double-checked locking to prevent multi-threaded refresh stampedes
+     while maintaining zero-lock overhead on fast-path token validation.
+5. Resilient Network Layer:
    - Hardened connection pooling (HTTPAdapter) to prevent socket exhaustion.
-   - Proactive early token renewal (60s buffer) + Reactive 401 self-healing loop.
-   - HTTP 429 rate-limit adherence via RFC-7231 / seconds-based Retry-After parsing with jitter.
+   - Proactive early token renewal (60s buffer) combined with a reactive 401 recovery loop.
+   - Adheres to HTTP 429 rate limits via RFC-7231 / seconds-based Retry-After parsing with jitter.
    - Exponential backoff on transient 5xx server errors.
-5. Agnostic Asset Coverage:
-   - Complete native support across all 7 Schwab Market Data endpoint families:
-     Quotes, Price History, Option Chains, Expiration Chains, Instruments,
-     Movers, and Market Hours.
+6. Agnostic Asset Coverage:
+   - Native interfaces for all 7 Schwab Market Data endpoint families: Quotes,
+     Price History, Option Chains, Expiration Chains, Instruments, Movers, and Market Hours.
 -----------------------------------------------------------------------------
 """
 
@@ -56,13 +58,13 @@ AUTH_URL = "https://api.schwabapi.com/v1/oauth/authorize"
 TOKEN_URL = "https://api.schwabapi.com/v1/oauth/token"
 MARKETDATA_BASE = "https://api.schwabapi.com/marketdata/v1"
 
-# Connect timeout: 3.05s (avoids TCP packet drop sync), Read timeout: 15.0s
+# Connection timeout: 3.05s (avoids TCP packet drop sync), Read timeout: 15.0s
 DEFAULT_TIMEOUT: Tuple[float, float] = (3.05, 15.0)
 DEFAULT_RETRIES = 3
 DEFAULT_BACKOFF_FACTOR = 0.5
 TOKEN_EXPIRY_BUFFER = 60  # Seconds before nominal expiry to proactively refresh
 
-# Configure module-level logger with NullHandler to avoid polluting client logs
+# Configure module-level logger with NullHandler
 logger = logging.getLogger("schwab_client")
 logger.addHandler(logging.NullHandler())
 
@@ -96,7 +98,7 @@ class APIRequestError(SchwabClientError):
 @dataclass(frozen=True)
 class TokenPayload:
     """
-    Thread-safe, immutable representation of OAuth state.
+    Thread-safe, immutable representation of OAuth credentials and lifecycle timestamps.
     """
     access_token: str
     token_type: str
@@ -109,7 +111,7 @@ class TokenPayload:
     def from_dict(cls, data: Dict[str, Any]) -> "TokenPayload":
         now = time.time()
         expires_in = int(data.get("expires_in", 1800))
-        # Use recorded expires_at, or calculate from current time
+        # Use recorded expires_at, or calculate from current epoch
         expires_at = float(data.get("expires_at", now + expires_in))
 
         return cls(
@@ -139,11 +141,11 @@ def validate_and_normalize_redirect_uri(uri: str) -> str:
     """
     Validates and standardizes the redirect_uri according to Schwab's Developer Portal rules:
       1. Must be a non-empty string.
-      2. Must not exceed Schwab's maximum 256-character field limit.
-      3. Must not contain whitespace characters (e.g. from copy-paste or space-separated lists).
-      4. Must contain a valid scheme (HTTPS required by most LOBs; HTTP or custom schemes for specific setups).
-      5. Normalizes bare root paths (e.g. 'https://127.0.0.1/' -> 'https://127.0.0.1') to eliminate
-         byte-mismatch errors between registration and runtime.
+      2. Must not exceed Schwab's maximum 255-character ceiling.
+      3. Must not contain whitespace characters.
+      4. Must declare a secure scheme ('https') as required by LMS.
+      5. Normalizes bare root paths (e.g., 'https://127.0.0.1/' -> 'https://127.0.0.1')
+         to prevent string-mismatch errors during token exchange.
 
     Raises:
         CallbackURLError: If the URI fails any structural specification.
@@ -153,28 +155,27 @@ def validate_and_normalize_redirect_uri(uri: str) -> str:
 
     cleaned = uri.strip()
 
-    # Schwab specification: Max 256 characters limit
-    if len(cleaned) > 256:
+    # Rule 1: 255-character maximum ceiling
+    if len(cleaned) > 255:
         raise CallbackURLError(
-            f"redirect_uri exceeds Schwab's 256-character limitation ({len(cleaned)} characters): '{cleaned}'"
+            f"redirect_uri exceeds Schwab's 255-character ceiling ({len(cleaned)} characters): '{cleaned}'"
         )
 
-    # Schwab specification: No whitespace allowed in callback URLs
+    # Rule 2: Whitespace prohibition
     if any(c.isspace() for c in cleaned):
-        raise CallbackURLError(f"redirect_uri contains illegal whitespace characters: '{cleaned}'")
+        raise CallbackURLError(f"redirect_uri cannot contain whitespace: '{cleaned}'")
 
     parsed = urllib.parse.urlparse(cleaned)
 
-    # Schwab specification: Must declare a valid scheme matching portal configuration
-    if not parsed.scheme:
+    # Rule 3: Strict HTTPS requirement for LMS production integration
+    if parsed.scheme.lower() != "https":
         raise CallbackURLError(
-            f"Invalid redirect_uri '{cleaned}': Missing URI scheme. "
-            "Must explicitly declare 'https://', 'http://', or a registered custom application scheme."
+            f"Invalid scheme '{parsed.scheme}' in redirect_uri '{cleaned}'. "
+            "Schwab Developer Portal requirements mandate the 'https://' scheme."
         )
 
-    # Normalization: Schwab enforces exact character-for-character matching.
-    # Portal setups frequently register 'https://127.0.0.1'. If a trailing slash '/' is sent without a path,
-    # strip it to match the registered root network location.
+    # Rule 4: Normalization: Schwab performs strict character matching.
+    # If a trailing slash is present on a bare host root, normalize it to match portal registration.
     if parsed.path == "/" and not parsed.query and not parsed.fragment:
         cleaned = f"{parsed.scheme}://{parsed.netloc}"
 
@@ -259,10 +260,9 @@ class SchwabClient:
         pool_connections: int = 50,
         pool_maxsize: int = 50,
     ) -> None:
-        # Load credentials from runtime arguments or environment variables
         self.client_id = (client_id or os.environ.get("SCHWAB_CLIENT_ID", "")).strip()
         self.client_secret = (client_secret or os.environ.get("SCHWAB_CLIENT_SECRET", "")).strip()
-        
+
         raw_redirect = (redirect_uri or os.environ.get("SCHWAB_REDIRECT_URI", "https://127.0.0.1")).strip()
         self.redirect_uri = validate_and_normalize_redirect_uri(raw_redirect)
 
@@ -356,22 +356,38 @@ class SchwabClient:
             params["state"] = state
         return f"{AUTH_URL}?{urllib.parse.urlencode(params)}"
 
-    def exchange_code_for_token(self, code_or_url: str) -> TokenPayload:
+    def exchange_code_for_token(
+        self,
+        code_or_url: str,
+        expected_state: Optional[str] = None,
+    ) -> TokenPayload:
         """
         Exchanges the authorization code from the browser redirect for an access/refresh pair.
-        URL-decodes the parameter to resolve '%40' (@) encoding issues.
+        Validates the returned CSRF 'state' token if an expected_state was provided.
         """
         raw = code_or_url.strip()
+        extracted_state = None
+
         if "code=" in raw:
             query = raw.split("?", 1)[-1] if "?" in raw else raw
             parsed = urllib.parse.parse_qs(query)
             extracted_code = parsed.get("code", [None])[0]
+            extracted_state = parsed.get("state", [None])[0]
             if not extracted_code:
                 extracted_code = raw.split("code=")[-1].split("&")[0]
         else:
             extracted_code = raw
 
-        sanitized_code = urllib.parse.unquote(extracted_code.strip())
+        # Cryptographic state verification (RFC 6749 Section 10.12)
+        if expected_state:
+            if not extracted_state:
+                raise TokenError("Security Alert: Authorization response is missing the required 'state' parameter.")
+            if extracted_state != expected_state:
+                raise TokenError(
+                    f"Security Alert: CSRF state mismatch detected! Expected '{expected_state}', got '{extracted_state}'."
+                )
+
+        sanitized_code = urllib.parse.unquote((extracted_code or "").strip())
         if not sanitized_code:
             raise TokenError("Failed to extract valid authorization code parameter.")
 
@@ -412,12 +428,10 @@ class SchwabClient:
 
     def get_valid_access_token(self) -> str:
         """Fast-path thread-safe retrieval of validated token."""
-        # Check without lock first (latency-critical read optimization)
         current = self._token_payload
         if current and time.time() < (current.expires_at - TOKEN_EXPIRY_BUFFER):
             return current.access_token
 
-        # Acquire lock and execute refresh if expired
         return self.refresh_access_token().access_token
 
     # -----------------------------------------------------------------------
@@ -448,10 +462,10 @@ class SchwabClient:
                 if attempt > self.max_retries:
                     raise APIRequestError(f"Network transport failure after {attempt} attempts: {err}") from err
                 backoff = DEFAULT_BACKOFF_FACTOR * (2 ** (attempt - 1))
-                time.sleep(backoff + (time.time() % 0.2))  # Add entropy jitter
+                time.sleep(backoff + (time.time() % 0.2))
                 continue
 
-            # Respect rate limits
+            # Handle rate limiting
             if resp.status_code == 429:
                 wait_time = _parse_retry_after(
                     resp.headers.get("Retry-After"),
@@ -512,9 +526,6 @@ class SchwabClient:
     def get_quotes(self, symbols: Union[str, List[str]], fields: Optional[str] = None) -> Dict[str, Any]:
         """
         1. Quotes: Real-time/delayed quotes for single or multiple equity/ETF/index symbols.
-        Parameters:
-            symbols: Single symbol or list/comma-delimited string (e.g. 'AAPL,MSFT,SPY').
-            fields: Optional subset filter (e.g. 'quote,fundamental,reference').
         """
         if isinstance(symbols, list):
             clean_syms = ",".join(s.strip().upper() for s in symbols if s.strip())
@@ -542,10 +553,6 @@ class SchwabClient:
     ) -> Dict[str, Any]:
         """
         2. Price History: Historical OHLCV candle bars across custom time intervals.
-        Parameters:
-            period_type: 'day', 'month', 'year', or 'ytd'.
-            frequency_type: 'minute', 'daily', 'weekly', or 'monthly'.
-            need_extended_hours: Set True to include pre/post-market candles.
         """
         params: Dict[str, Any] = {
             "symbol": symbol.strip().upper(),
@@ -575,10 +582,6 @@ class SchwabClient:
     ) -> Dict[str, Any]:
         """
         3. Option Chains: Real-time strike matrix with implied volatility and Greeks.
-        Parameters:
-            contract_type: 'CALL', 'PUT', or 'ALL'.
-            strategy: 'SINGLE', 'ANALYTICAL', 'COVERED', 'VERTICAL', etc.
-            strike_count: Number of strikes above and below the at-the-money price.
         """
         params: Dict[str, Any] = {
             "symbol": symbol.strip().upper(),
@@ -608,8 +611,6 @@ class SchwabClient:
     def get_instruments(self, symbol: str, projection: str = "fundamental") -> Dict[str, Any]:
         """
         5. Instruments: Asset profiles, CUSIP identifiers, and fundamental balance sheet metrics.
-        Parameters:
-            projection: 'symbol-search', 'symbol-regex', 'desc-search', or 'fundamental'.
         """
         params = {
             "symbol": symbol.strip().upper(),
@@ -625,9 +626,6 @@ class SchwabClient:
     ) -> Dict[str, Any]:
         """
         6. Movers: Top market movers across benchmark indices ($SPX, $COMPX, $DJI).
-        Parameters:
-            sort_by: 'VOLUME', 'TRADES', 'PERCENT_CHANGE_UP', or 'PERCENT_CHANGE_DOWN'.
-            frequency: 0 (default/all day) or specific interval window.
         """
         valid_indices = {"$SPX", "$COMPX", "$DJI"}
         target = index_symbol.strip().upper()
@@ -635,15 +633,12 @@ class SchwabClient:
             raise ValueError(f"index_symbol must be one of {valid_indices}, got '{index_symbol}'")
 
         params = {"sort": sort_by.upper(), "frequency": frequency}
-        # Explicitly URL-encode the '$' character in index paths
         encoded_index = urllib.parse.quote(target)
         return self._execute_authenticated(f"/movers/{encoded_index}", params=params)
 
     def get_market_hours(self, markets: str = "equity,option") -> Dict[str, Any]:
         """
         7. Market Hours: Trading session windows across equity, option, bond, and forex markets.
-        Parameters:
-            markets: Comma-separated markets ('equity', 'option', 'bond', 'forex').
         """
         return self._execute_authenticated("/markets", params={"markets": markets.lower().strip()})
 

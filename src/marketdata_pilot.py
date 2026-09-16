@@ -5,19 +5,22 @@ Institutional-Grade Schwab Market Data Orchestrator & Audit Pipeline.
 
 Designed for: Global Equity Strategy, Market Risk Systems, and Automated Pipelines.
 
-Key Capabilities:
-1. Zero Process Pollution: Credentials are held strictly in localized call frames;
-   secrets are never written back to `os.environ` or printed to process tables.
-2. Dual-Tier OAuth Protocol:
-   - Tier 1: Proactive & reactive silent token refreshing (30-min window).
-   - Tier 2: Deterministic OAuth flow restart on token revocation, technical failures,
+Security & Architectural Guarantees:
+1. Zero Secret Ingestion:
+   - Credentials are held strictly in ephemeral variables and never written back to
+     global runtime tables or `os.environ`.
+2. Cryptographic CSRF Protection (RFC 6749):
+   - Generates high-entropy nonces via Python's `secrets` module during authorization
+     and asserts strict parity before initiating token code exchange.
+3. Dual-Tier OAuth Protocol:
+   - Tier 1: Proactive silent renewal (30-minute window) using cached refresh token.
+   - Tier 2: Deterministic full OAuth restart on token revocation, technical failures,
      CAG/LMS scope modifications, or administrative override (`force_reauth=True`).
-3. Precision Failure Boundary: Differentiates between authentication failures
-   (triggering OAuth re-handshake) and gateway/asset failures (failing fast).
-4. Multi-Tenant Secure Storage: Token caches are isolated under strict POSIX file masks
-   (0o600 file / 0o700 directory) to prevent cross-container or local snooping.
-5. Agnostic Audit Engine: Provides complete 7-endpoint inspection across equities,
-   ETFs, mutual funds, and benchmark indices.
+4. Precision Failure Boundary:
+   - Differentiates between authentication failures (which initiate an OAuth handshake)
+     and upstream gateway/asset errors (which fail fast).
+5. Cross-Platform Directory Permissions:
+   - Automatically enforces POSIX 0o700 directory masks on token directories.
 -----------------------------------------------------------------------------
 """
 
@@ -28,6 +31,7 @@ import getpass
 import logging
 import os
 import re
+import secrets
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +51,7 @@ if str(PROJECT_SRC) not in sys.path:
 try:
     from schwab_client import (
         APIRequestError,
+        CallbackURLError,
         SchwabClient,
         SchwabClientError,
         TokenError,
@@ -57,12 +62,11 @@ except ImportError as exc:
         f"Verify file placement and sys.path. Detail: {exc}"
     ) from exc
 
-# Module-level logger (configured with NullHandler for library usage)
+# Configure module-level logger with NullHandler
 logger = logging.getLogger("schwab_orchestrator")
 logger.addHandler(logging.NullHandler())
 
 # Strict symbol regex supporting equities, multi-class shares, and indices
-# Examples: AAPL, BRK.B, BF/B, SPY, $SPX, $COMPX, $DJI
 SYMBOL_REGEX = re.compile(r"^[\$A-Z0-9.\-_/]{1,15}$")
 
 
@@ -119,7 +123,7 @@ def _resolve_credential(
     Resolves credentials via strict precedence:
       1. Enterprise Secret Provider callback (HashiCorp Vault, AWS Secrets Manager)
       2. Google Colab User Secrets Vault
-      3. OS Environment Variable (read-only; not modified)
+      3. OS Environment Variable (read-only inspection)
       4. Masked Interactive Prompt (terminal or notebook fallback)
 
     Crucial Security Rule: Resolved values are NEVER injected back into `os.environ`
@@ -148,7 +152,6 @@ def _resolve_credential(
     if interactive:
         try:
             if is_secret:
-                # Use getpass to suppress terminal echo and prevent DOM/log snooping
                 user_val = getpass.getpass(prompt=f"{prompt_label}: ").strip()
             else:
                 user_val = input(f"{prompt_label}: ").strip()
@@ -234,19 +237,6 @@ def run_marketdata_flow(
 ) -> RunResult:
     """
     Executes the market data retrieval lifecycle with full dual-tier OAuth support.
-
-    Parameters:
-        symbol: Single ticker, list of tickers, or comma-delimited string.
-        interactive: If True, permits console/browser OAuth login if unauthenticated.
-        force_reauth: If True, purges cached tokens and executes a full OAuth restart.
-                     Required when modifying CAG account selections, altering scopes,
-                     updating 2FA credentials, or recovering from server-side revocations.
-        secret_provider: Optional enterprise secret manager callback: fn(key) -> str.
-        token_file_path: Explicit override for token JSON location.
-        client_kwargs: Additional configuration passed directly to SchwabClient.
-
-    Returns:
-        RunResult: Structured execution summary and market data payload.
     """
     validated_symbols = _sanitize_and_validate_symbols(symbol)
     resolved_token_path = (
@@ -280,7 +270,7 @@ def run_marketdata_flow(
 
     kwargs = client_kwargs.copy() if client_kwargs else {}
 
-    # 3. Instantiate Hardened Client within Managed Socket Context
+    # 3. Instantiate Client within Managed Socket Context
     with SchwabClient(
         client_id=client_id,
         client_secret=client_secret,
@@ -304,8 +294,6 @@ def run_marketdata_flow(
             except TokenError as te:
                 logger.info("Cached token invalid or refresh expired: %s. Initiating OAuth restart.", te)
             except APIRequestError as ae:
-                # If rejected with HTTP 401, the gateway invalidated the token; proceed to restart.
-                # For any other HTTP error (400, 404, 500), fail fast to prevent bogus auth prompts.
                 if getattr(ae, "status_code", None) == 401:
                     logger.warning("Gateway returned HTTP 401 Unauthorized. Forcing OAuth restart.")
                 else:
@@ -334,7 +322,10 @@ def run_marketdata_flow(
             )
 
         try:
-            auth_url = client.build_auth_url()
+            # Generate a cryptographically secure CSRF protection nonce
+            session_state = secrets.token_urlsafe(16)
+            auth_url = client.build_auth_url(state=session_state)
+
             print("\n" + "=" * 78)
             print("SCHWAB FULL OAUTH RESTART (LMS CONSENT & ACCOUNT SELECTION)")
             print("=" * 78)
@@ -347,8 +338,8 @@ def run_marketdata_flow(
             if not auth_code:
                 raise OrchestratorError("No authorization code provided. Workflow aborted.")
 
-            print("\nExchanging authorization code for token pair...")
-            client.exchange_code_for_token(auth_code)
+            print("\nExchanging code for token pair with CSRF state verification...")
+            client.exchange_code_for_token(auth_code, expected_state=session_state)
 
             # Step C: Retrieve Market Data with newly minted token
             quote_payload = client.get_quotes(validated_symbols)
@@ -390,15 +381,6 @@ def run_full_marketdata_catalog(
     """
     Audits and queries all 7 Schwab Market Data endpoint families for a given asset.
     Handles non-optionable securities, indices, and structured assets gracefully.
-
-    Endpoint Coverage:
-      1. Quotes (NBBO, Last, Volume, Fundamentals)
-      2. PriceHistory (OHLCV multi-interval candles)
-      3. OptionChains (Strikes, Expiries, Greeks, Implied Volatility)
-      4. OptionExpirations (Calendar of active expiration dates)
-      5. Instruments (CUSIP, Exchange, Fundamental accounting metrics)
-      6. Movers (Index gainers, losers, and volume leaders)
-      7. MarketHours (Trading session windows across asset classes)
     """
     clean_symbol = symbol.strip().upper()
     resolved_token_path = (
@@ -444,10 +426,11 @@ def run_full_marketdata_catalog(
         except TokenError:
             if not interactive:
                 raise OrchestratorError("Authentication missing and interactive mode is disabled.")
-            auth_url = client.build_auth_url()
+            session_state = secrets.token_urlsafe(16)
+            auth_url = client.build_auth_url(state=session_state)
             print("\nAuthorization required. Complete consent flow:\n", auth_url)
             auth_code = input("\nPaste Redirect URL or Code: ").strip()
-            client.exchange_code_for_token(auth_code)
+            client.exchange_code_for_token(auth_code, expected_state=session_state)
 
         print("\n" + "=" * 82)
         print(f"SCHWAB MARKET DATA 7-ENDPOINT AUDIT SNAPSHOT: {clean_symbol}")
@@ -536,7 +519,7 @@ def run_full_marketdata_catalog(
 
 
 # ---------------------------------------------------------------------------
-# CLI INTERFACE & AUTOMATION DISPATCHER
+# CLI INTERFACE & DISPATCHER
 # ---------------------------------------------------------------------------
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -547,7 +530,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "symbol",
         nargs="?",
         default="SPY",
-        help="Ticker symbol(s), comma-separated (e.g. SPY or AAPL,MSFT,NVDA)",
+        help="Ticker symbol(s), comma-separated (e.g., SPY or AAPL,MSFT,NVDA)",
     )
     parser.add_argument(
         "--audit-catalog",
@@ -598,7 +581,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     )
 
     try:
-        # Route 1: Comprehensive 7-Endpoint Audit Catalog
         if args.audit_catalog:
             run_full_marketdata_catalog(
                 symbol=args.symbol,
@@ -609,7 +591,6 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
             return 0
 
-        # Route 2: Standard Production Market Data Pipeline
         res = run_marketdata_flow(
             symbol=args.symbol,
             interactive=not args.non_interactive,
