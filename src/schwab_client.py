@@ -3,30 +3,35 @@ schwab_client.py
 -----------------------------------------------------------------------------
 Institutional-Grade Charles Schwab OAuth2 & Market Data API Client.
 
-Designed for: Global Equity Strategy, Market Risk Systems, and Algorithmic Pipelines.
+Designed for: Global Equity Strategy, Market Risk Management, and Quant Pipelines.
 
-Core Architecture & Security Features:
-1. Strict Callback URL Verification:
-   - Enforces the 255-character maximum length limit mandated by Schwab.
+Key Architectural Guarantees:
+1. Enterprise Error Diagnostics & Correlation Tracking:
+   - Ingests and parses Schwab's structured JSON error schema:
+     {"errors": [{"status": ..., "title": ..., "detail": ..., "id": ...}]}
+   - Captures and surfaces Schwab diagnostic response headers:
+     'Schwab-Client-CorrelId' and 'Schwab-Resource-Version' across all failure modes.
+2. Callback URI Strict Validation:
+   - Enforces the 255-character maximum ceiling mandated by Developer Portal rules.
    - Strictly validates the HTTPS protocol requirement for Login Micro Site (LMS).
-   - Prohibits whitespace characters in callback definitions.
-   - Normalizes root-level trailing slashes (e.g., 'https://127.0.0.1/' -> 'https://127.0.0.1')
-     to prevent byte-level mismatch rejections during token exchange.
-2. CSRF Mitigation (RFC 6749 Section 10.12):
+   - Prohibits embedded whitespace characters.
+   - Normalizes trailing slashes on bare host roots (e.g. 'https://127.0.0.1/' -> 'https://127.0.0.1')
+     to prevent byte-level string mismatches during token authorization.
+3. Cryptographic CSRF Defense (RFC 6749 Section 10.12):
    - Supports cryptographically random state tokens on authorization requests.
-   - Validates returned state tokens before code exchange to prevent CSRF attacks.
-3. Low-Level Token Isolation:
-   - Uses low-level OS file descriptors (os.open with O_CREAT | O_TRUNC | O_WRONLY)
-     to enforce strict POSIX 0o600 permissions at creation, preventing umask race conditions.
-4. Concurrency & Thread Safety:
-   - Implements double-checked locking to prevent multi-threaded refresh stampedes
-     while maintaining zero-lock overhead on fast-path token validation.
-5. Resilient Network Layer:
-   - Hardened connection pooling (HTTPAdapter) to prevent socket exhaustion.
-   - Proactive early token renewal (60s buffer) combined with a reactive 401 recovery loop.
-   - Adheres to HTTP 429 rate limits via RFC-7231 / seconds-based Retry-After parsing with jitter.
-   - Exponential backoff on transient 5xx server errors.
-6. Agnostic Asset Coverage:
+   - Verifies returned state parameter integrity before code exchange.
+4. Defense-in-Depth Token Security:
+   - Enforces POSIX 0o600 permissions at creation using low-level os.open flags
+     (O_CREAT | O_TRUNC | O_WRONLY | O_NOFOLLOW), eliminating umask race windows.
+5. High-Concurrency Thread Safety:
+   - Double-checked locking prevents multi-threaded refresh stampedes while maintaining
+     zero lock contention on fast-path memory reads.
+6. Resilient Transport Layer:
+   - Connection pool scaling via HTTPAdapter.
+   - Proactive early token renewal (60s buffer) + Reactive 401 self-healing recovery loop.
+   - HTTP 429 rate-limit adherence via RFC-7231 / seconds-based Retry-After parsing with jitter.
+   - Exponential backoff with entropy jitter on transient 5xx gateway errors.
+7. Agnostic Market Data Coverage:
    - Native interfaces for all 7 Schwab Market Data endpoint families: Quotes,
      Price History, Option Chains, Expiration Chains, Instruments, Movers, and Market Hours.
 -----------------------------------------------------------------------------
@@ -58,13 +63,12 @@ AUTH_URL = "https://api.schwabapi.com/v1/oauth/authorize"
 TOKEN_URL = "https://api.schwabapi.com/v1/oauth/token"
 MARKETDATA_BASE = "https://api.schwabapi.com/marketdata/v1"
 
-# Connection timeout: 3.05s (avoids TCP packet drop sync), Read timeout: 15.0s
+# Connect timeout: 3.05s (prevents TCP syn drop hang), Read timeout: 15.0s
 DEFAULT_TIMEOUT: Tuple[float, float] = (3.05, 15.0)
 DEFAULT_RETRIES = 3
 DEFAULT_BACKOFF_FACTOR = 0.5
-TOKEN_EXPIRY_BUFFER = 60  # Seconds before nominal expiry to proactively refresh
+TOKEN_EXPIRY_BUFFER = 60  # Early renewal buffer in seconds
 
-# Configure module-level logger with NullHandler
 logger = logging.getLogger("schwab_client")
 logger.addHandler(logging.NullHandler())
 
@@ -85,11 +89,22 @@ class CallbackURLError(SchwabClientError):
 
 
 class APIRequestError(SchwabClientError):
-    """Raised when an API endpoint returns an unrecoverable HTTP error status."""
+    """
+    Raised when an API endpoint returns an unrecoverable HTTP status.
+    Carries the HTTP status code, Schwab Correlation ID, and structured error details.
+    """
 
-    def __init__(self, message: str, status_code: Optional[int] = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        status_code: Optional[int] = None,
+        correl_id: Optional[str] = None,
+        error_details: Optional[str] = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.correl_id = correl_id or "UNKNOWN"
+        self.error_details = error_details or ""
 
 
 # ---------------------------------------------------------------------------
@@ -97,9 +112,7 @@ class APIRequestError(SchwabClientError):
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class TokenPayload:
-    """
-    Thread-safe, immutable representation of OAuth credentials and lifecycle timestamps.
-    """
+    """Thread-safe, immutable representation of OAuth credentials and lifecycle timestamps."""
     access_token: str
     token_type: str
     expires_in: int
@@ -111,7 +124,6 @@ class TokenPayload:
     def from_dict(cls, data: Dict[str, Any]) -> "TokenPayload":
         now = time.time()
         expires_in = int(data.get("expires_in", 1800))
-        # Use recorded expires_at, or calculate from current epoch
         expires_at = float(data.get("expires_at", now + expires_in))
 
         return cls(
@@ -139,43 +151,35 @@ class TokenPayload:
 # ---------------------------------------------------------------------------
 def validate_and_normalize_redirect_uri(uri: str) -> str:
     """
-    Validates and standardizes the redirect_uri according to Schwab's Developer Portal rules:
+    Validates and standardizes redirect_uri according to Schwab's Developer Portal rules:
       1. Must be a non-empty string.
       2. Must not exceed Schwab's maximum 255-character ceiling.
       3. Must not contain whitespace characters.
       4. Must declare a secure scheme ('https') as required by LMS.
       5. Normalizes bare root paths (e.g., 'https://127.0.0.1/' -> 'https://127.0.0.1')
          to prevent string-mismatch errors during token exchange.
-
-    Raises:
-        CallbackURLError: If the URI fails any structural specification.
     """
     if not uri or not isinstance(uri, str):
         raise CallbackURLError("redirect_uri must be a non-empty string.")
 
     cleaned = uri.strip()
 
-    # Rule 1: 255-character maximum ceiling
     if len(cleaned) > 255:
         raise CallbackURLError(
-            f"redirect_uri exceeds Schwab's 255-character ceiling ({len(cleaned)} characters): '{cleaned}'"
+            f"redirect_uri exceeds Schwab's 255-character ceiling ({len(cleaned)} chars): '{cleaned}'"
         )
 
-    # Rule 2: Whitespace prohibition
     if any(c.isspace() for c in cleaned):
-        raise CallbackURLError(f"redirect_uri cannot contain whitespace: '{cleaned}'")
+        raise CallbackURLError(f"redirect_uri contains illegal whitespace characters: '{cleaned}'")
 
     parsed = urllib.parse.urlparse(cleaned)
 
-    # Rule 3: Strict HTTPS requirement for LMS production integration
     if parsed.scheme.lower() != "https":
         raise CallbackURLError(
             f"Invalid scheme '{parsed.scheme}' in redirect_uri '{cleaned}'. "
             "Schwab Developer Portal requirements mandate the 'https://' scheme."
         )
 
-    # Rule 4: Normalization: Schwab performs strict character matching.
-    # If a trailing slash is present on a bare host root, normalize it to match portal registration.
     if parsed.path == "/" and not parsed.query and not parsed.fragment:
         cleaned = f"{parsed.scheme}://{parsed.netloc}"
 
@@ -190,7 +194,6 @@ def _atomic_write_secure_json(target_path: Path, data: Dict[str, Any]) -> None:
     target_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = target_path.with_name(f"{target_path.name}.tmp.{os.getpid()}_{threading.get_ident()}")
 
-    # Enforce strict owner-only read/write flags at file descriptor creation
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
@@ -206,7 +209,6 @@ def _atomic_write_secure_json(target_path: Path, data: Dict[str, Any]) -> None:
             tmp_path.unlink()
         raise
 
-    # Atomic rename replace
     os.replace(tmp_path, target_path)
 
 
@@ -215,14 +217,44 @@ def _safe_json_parse(resp: Response) -> Dict[str, Any]:
     try:
         return resp.json()
     except ValueError as exc:
+        correl_id = resp.headers.get("Schwab-Client-CorrelId", "UNKNOWN")
         raise APIRequestError(
-            f"Invalid JSON returned from endpoint (HTTP {resp.status_code})",
+            f"Invalid JSON returned from endpoint (HTTP {resp.status_code}). CorrelId: {correl_id}",
             status_code=resp.status_code,
+            correl_id=correl_id,
         ) from exc
 
 
+def _parse_schwab_error(resp: Response) -> str:
+    """
+    Extracts detailed diagnostics from Schwab's structured JSON error schema:
+    {"errors": [{"status": 400, "title": "Bad Request", "detail": "...", "id": "guid"}]}
+    Falls back to sanitized raw text if payload does not match schema.
+    """
+    try:
+        data = resp.json()
+        if isinstance(data, dict) and "errors" in data and isinstance(data["errors"], list):
+            messages = []
+            for err in data["errors"]:
+                if isinstance(err, dict):
+                    title = err.get("title", "")
+                    detail = err.get("detail", "")
+                    err_id = err.get("id", "")
+                    elements = [e for e in (title, detail) if e]
+                    msg = ": ".join(elements) if elements else "Unspecified Schwab error"
+                    if err_id:
+                        msg += f" (Error ID: {err_id})"
+                    messages.append(msg)
+            if messages:
+                return " | ".join(messages)
+    except Exception:
+        pass
+
+    return resp.text.strip()[:300] if resp.text else "No error payload returned by gateway."
+
+
 def _parse_retry_after(header_val: Optional[str], default_wait: float) -> float:
-    """Parses RFC-7231 / integer seconds from HTTP Retry-After headers."""
+    """Parses RFC-7231 or integer seconds from HTTP Retry-After headers."""
     if not header_val:
         return default_wait
     try:
@@ -317,7 +349,6 @@ class SchwabClient:
     def _persist_tokens(self, token_data: Dict[str, Any]) -> TokenPayload:
         """Atomically caches new token sets to disk and updates in-memory reference."""
         with self._tokens_lock:
-            # Retain existing refresh token if response omitted it
             if "refresh_token" not in token_data and self._token_payload and self._token_payload.refresh_token:
                 token_data["refresh_token"] = self._token_payload.refresh_token
 
@@ -343,9 +374,7 @@ class SchwabClient:
     # OAUTH TRANSACTIONS
     # -----------------------------------------------------------------------
     def build_auth_url(self, state: Optional[str] = None) -> str:
-        """
-        Constructs user consent URL with validated callback URI and optional CSRF state parameter.
-        """
+        """Constructs user consent URL with validated callback URI and optional CSRF state."""
         params = {
             "response_type": "code",
             "client_id": self.client_id,
@@ -362,8 +391,8 @@ class SchwabClient:
         expected_state: Optional[str] = None,
     ) -> TokenPayload:
         """
-        Exchanges the authorization code from the browser redirect for an access/refresh pair.
-        Validates the returned CSRF 'state' token if an expected_state was provided.
+        Exchanges the authorization code for access and refresh tokens.
+        Validates the returned CSRF 'state' token if expected_state was supplied.
         """
         raw = code_or_url.strip()
         extracted_state = None
@@ -399,14 +428,16 @@ class SchwabClient:
 
         resp = self._raw_http_request("POST", TOKEN_URL, headers=self._get_basic_auth_header(), data=payload)
         if resp.status_code != 200:
-            raise TokenError(f"OAuth code exchange failed (HTTP {resp.status_code}).")
+            correl_id = resp.headers.get("Schwab-Client-CorrelId", "UNKNOWN")
+            err_msg = _parse_schwab_error(resp)
+            raise TokenError(
+                f"OAuth code exchange failed (HTTP {resp.status_code}). CorrelId: {correl_id} | Details: {err_msg}"
+            )
 
         return self._persist_tokens(_safe_json_parse(resp))
 
     def refresh_access_token(self) -> TokenPayload:
-        """
-        Executes a silent token refresh using double-checked thread synchronization.
-        """
+        """Executes a silent token refresh using double-checked thread synchronization."""
         with self._tokens_lock:
             # Re-check: Did another worker thread complete refresh while this thread was waiting?
             if self._token_payload and time.time() < (self._token_payload.expires_at - TOKEN_EXPIRY_BUFFER):
@@ -422,12 +453,17 @@ class SchwabClient:
 
             resp = self._raw_http_request("POST", TOKEN_URL, headers=self._get_basic_auth_header(), data=payload)
             if resp.status_code != 200:
-                raise TokenError(f"Refresh token rejected by Schwab (HTTP {resp.status_code}).")
+                correl_id = resp.headers.get("Schwab-Client-CorrelId", "UNKNOWN")
+                err_msg = _parse_schwab_error(resp)
+                raise TokenError(
+                    f"Refresh token rejected by Schwab (HTTP {resp.status_code}). "
+                    f"CorrelId: {correl_id} | Details: {err_msg}"
+                )
 
             return self._persist_tokens(_safe_json_parse(resp))
 
     def get_valid_access_token(self) -> str:
-        """Fast-path thread-safe retrieval of validated token."""
+        """Fast-path thread-safe retrieval of validated access token."""
         current = self._token_payload
         if current and time.time() < (current.expires_at - TOKEN_EXPIRY_BUFFER):
             return current.access_token
@@ -467,22 +503,36 @@ class SchwabClient:
 
             # Handle rate limiting
             if resp.status_code == 429:
+                correl_id = resp.headers.get("Schwab-Client-CorrelId", "UNKNOWN")
                 wait_time = _parse_retry_after(
                     resp.headers.get("Retry-After"),
                     DEFAULT_BACKOFF_FACTOR * (2 ** (attempt - 1)),
                 )
-                logger.warning("Schwab rate limit triggered. Backing off for %.2f seconds.", wait_time)
+                logger.warning(
+                    "Schwab rate limit triggered (CorrelId: %s). Backing off for %.2f seconds.",
+                    correl_id,
+                    wait_time,
+                )
                 if attempt > self.max_retries:
-                    raise APIRequestError("Exceeded maximum retries on HTTP 429 Rate Limit.", status_code=429)
+                    raise APIRequestError(
+                        f"Exceeded maximum retries on HTTP 429 Rate Limit. CorrelId: {correl_id}",
+                        status_code=429,
+                        correl_id=correl_id,
+                    )
                 time.sleep(wait_time)
                 continue
 
             # Retry transient server errors
             if 500 <= resp.status_code < 600:
+                correl_id = resp.headers.get("Schwab-Client-CorrelId", "UNKNOWN")
                 if attempt > self.max_retries:
+                    err_msg = _parse_schwab_error(resp)
                     raise APIRequestError(
-                        f"Persistent server failure (HTTP {resp.status_code}).",
+                        f"Persistent server failure (HTTP {resp.status_code}). "
+                        f"CorrelId: {correl_id} | Details: {err_msg}",
                         status_code=resp.status_code,
+                        correl_id=correl_id,
+                        error_details=err_msg,
                     )
                 backoff = DEFAULT_BACKOFF_FACTOR * (2 ** (attempt - 1))
                 time.sleep(backoff)
@@ -495,7 +545,7 @@ class SchwabClient:
         endpoint_path: str,
         params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Base API handler with automatic 401 token invalidation recovery loop."""
+        """Base API handler with automatic 401 token recovery and diagnostic logging."""
         target_url = f"{MARKETDATA_BASE}{endpoint_path}"
 
         for is_recovery_attempt in (False, True):
@@ -504,28 +554,48 @@ class SchwabClient:
 
             resp = self._raw_http_request("GET", target_url, headers=headers, params=params)
 
-            # Self-healing on unexpected token revocation
+            # Self-healing on unexpected token invalidation
             if resp.status_code == 401 and not is_recovery_attempt:
-                logger.warning("HTTP 401 received. Invalidating cached access token and forcing refresh.")
+                correl_id = resp.headers.get("Schwab-Client-CorrelId", "UNKNOWN")
+                logger.warning("HTTP 401 received (CorrelId: %s). Forcing access token refresh.", correl_id)
                 self.refresh_access_token()
                 continue
 
             if resp.status_code != 200:
+                correl_id = resp.headers.get("Schwab-Client-CorrelId", "UNKNOWN")
+                version = resp.headers.get("Schwab-Resource-Version", "1")
+                err_msg = _parse_schwab_error(resp)
+
                 raise APIRequestError(
-                    f"API request failed on {endpoint_path} with status {resp.status_code}",
+                    f"API request failed on {endpoint_path} (HTTP {resp.status_code}). "
+                    f"CorrelId: {correl_id} | Version: {version} | Details: {err_msg}",
                     status_code=resp.status_code,
+                    correl_id=correl_id,
+                    error_details=err_msg,
                 )
 
             return _safe_json_parse(resp)
 
-        raise APIRequestError("Request failed after re-authentication recovery attempt.", status_code=401)
+        correl_id = resp.headers.get("Schwab-Client-CorrelId", "UNKNOWN")
+        raise APIRequestError(
+            f"Request failed after re-authentication recovery attempt. CorrelId: {correl_id}",
+            status_code=401,
+            correl_id=correl_id,
+        )
 
     # -----------------------------------------------------------------------
     # ALL 7 SCHWAB MARKET DATA ENDPOINT FAMILIES
     # -----------------------------------------------------------------------
-    def get_quotes(self, symbols: Union[str, List[str]], fields: Optional[str] = None) -> Dict[str, Any]:
+    def get_quotes(
+        self,
+        symbols: Union[str, List[str]],
+        fields: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         1. Quotes: Real-time/delayed quotes for single or multiple equity/ETF/index symbols.
+        Parameters:
+            symbols: Single ticker or list/comma-delimited tickers (e.g. 'AAPL,MSFT,SPY').
+            fields: Comma-separated subset filter: 'quote,fundamental,extended,reference,regular'.
         """
         if isinstance(symbols, list):
             clean_syms = ",".join(s.strip().upper() for s in symbols if s.strip())
@@ -540,6 +610,22 @@ class SchwabClient:
             params["fields"] = fields.strip()
         return self._execute_authenticated("/quotes", params=params)
 
+    def get_quote(
+        self,
+        symbol: str,
+        fields: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Convenience method: Retrieves quote breakdown for a single isolated symbol.
+        """
+        clean_sym = symbol.strip().upper()
+        if not clean_sym:
+            raise ValueError("Symbol must be a non-empty string.")
+
+        # Resolves via standard /quotes endpoint with single ticker query
+        payload = self.get_quotes(symbols=clean_sym, fields=fields)
+        return payload.get(clean_sym, payload)
+
     def get_price_history(
         self,
         symbol: str,
@@ -553,6 +639,10 @@ class SchwabClient:
     ) -> Dict[str, Any]:
         """
         2. Price History: Historical OHLCV candle bars across custom time intervals.
+        Parameters:
+            period_type: 'day', 'month', 'year', or 'ytd'.
+            frequency_type: 'minute', 'daily', 'weekly', or 'monthly'.
+            need_extended_hours: Set True to include pre/post-market candles.
         """
         params: Dict[str, Any] = {
             "symbol": symbol.strip().upper(),
@@ -582,6 +672,10 @@ class SchwabClient:
     ) -> Dict[str, Any]:
         """
         3. Option Chains: Real-time strike matrix with implied volatility and Greeks.
+        Parameters:
+            contract_type: 'CALL', 'PUT', or 'ALL'.
+            strategy: 'SINGLE', 'ANALYTICAL', 'COVERED', 'VERTICAL', etc.
+            strike_count: Number of strikes above and below the at-the-money price.
         """
         params: Dict[str, Any] = {
             "symbol": symbol.strip().upper(),
@@ -611,6 +705,8 @@ class SchwabClient:
     def get_instruments(self, symbol: str, projection: str = "fundamental") -> Dict[str, Any]:
         """
         5. Instruments: Asset profiles, CUSIP identifiers, and fundamental balance sheet metrics.
+        Parameters:
+            projection: 'symbol-search', 'symbol-regex', 'desc-search', or 'fundamental'.
         """
         params = {
             "symbol": symbol.strip().upper(),
@@ -626,6 +722,9 @@ class SchwabClient:
     ) -> Dict[str, Any]:
         """
         6. Movers: Top market movers across benchmark indices ($SPX, $COMPX, $DJI).
+        Parameters:
+            sort_by: 'VOLUME', 'TRADES', 'PERCENT_CHANGE_UP', or 'PERCENT_CHANGE_DOWN'.
+            frequency: 0 (default/all day) or specific interval window.
         """
         valid_indices = {"$SPX", "$COMPX", "$DJI"}
         target = index_symbol.strip().upper()
@@ -639,6 +738,8 @@ class SchwabClient:
     def get_market_hours(self, markets: str = "equity,option") -> Dict[str, Any]:
         """
         7. Market Hours: Trading session windows across equity, option, bond, and forex markets.
+        Parameters:
+            markets: Comma-separated markets ('equity', 'option', 'bond', 'forex').
         """
         return self._execute_authenticated("/markets", params={"markets": markets.lower().strip()})
 
