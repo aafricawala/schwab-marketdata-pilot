@@ -561,27 +561,34 @@ def extract_historical_timeseries(
         )
         return parse_price_history_to_df(raw_history)
 
-
 def extract_volatility_surface(
     symbol: str,
     *,
     strike_count: Optional[int] = None,
     contract_type: str = "ALL",
+    chunk_by_expiration: bool = True,
     interactive: bool = True,
     force_reauth: bool = False,
     token_file_path: Optional[Union[str, Path]] = None,
 ) -> pd.DataFrame:
     """
-    Production-grade option surface extraction.
-    Pulls the full unbounded or bounded option chain and normalizes Greeks into a DataFrame.
+    Production-grade option surface extraction with automatic tenor chunking.
+
+    Solves the Apigee 'protocol.http.TooBigBody' (HTTP 502) gateway buffer overflow
+    by querying the active expiration calendar via /expirationchain and pulling
+    full-strike chains per expiration slice when strike_count is None.
     """
     clean_sym = _sanitize_and_validate_symbols(symbol)
     resolved_token_path = (
         Path(token_file_path).resolve() if token_file_path else resolve_secure_token_path()
     )
 
-    client_id = _resolve_credential("SCHWAB_CLIENT_ID", "Enter Schwab Client ID", is_secret=False, interactive=interactive)
-    client_secret = _resolve_credential("SCHWAB_CLIENT_SECRET", "Enter Schwab Client Secret", is_secret=True, interactive=interactive)
+    client_id = _resolve_credential(
+        "SCHWAB_CLIENT_ID", "Enter Schwab Client ID", is_secret=False, interactive=interactive
+    )
+    client_secret = _resolve_credential(
+        "SCHWAB_CLIENT_SECRET", "Enter Schwab Client Secret", is_secret=True, interactive=interactive
+    )
     redirect_uri = os.environ.get("SCHWAB_REDIRECT_URI", "https://127.0.0.1")
 
     with SchwabClient(
@@ -590,13 +597,54 @@ def extract_volatility_surface(
         redirect_uri=redirect_uri,
         token_file_path=resolved_token_path,
     ) as client:
-        raw_chains = client.get_option_chain(
-            symbol=clean_sym,
-            contract_type=contract_type,
-            strike_count=strike_count,
-        )
-        return parse_option_chain_to_df(raw_chains)
 
+        # Fast path: Bounded strike queries fit comfortably inside the proxy buffer
+        if strike_count is not None or not chunk_by_expiration:
+            raw_chain = client.get_option_chain(
+                symbol=clean_sym,
+                contract_type=contract_type,
+                strike_count=strike_count,
+            )
+            return parse_option_chain_to_df(raw_chain)
+
+        # Resilient path: Chunk across expirations to avoid HTTP 502 buffer overflows
+        logger.info("Extracting full surface for %s via expiration calendar chunking...", clean_sym)
+        exp_payload = client.get_option_expirations(clean_sym)
+        expirations = [
+            item["expirationDate"]
+            for item in exp_payload.get("expirationList", [])
+            if "expirationDate" in item
+        ]
+
+        if not expirations:
+            logger.warning("Zero active expiration cycles returned for %s.", clean_sym)
+            return pd.DataFrame()
+
+        surface_slices: List[pd.DataFrame] = []
+
+        for exp_date in expirations:
+            try:
+                chunk_chain = client.get_option_chain(
+                    symbol=clean_sym,
+                    contract_type=contract_type,
+                    strike_count=None,
+                    from_date=exp_date,
+                    to_date=exp_date,
+                )
+                df_slice = parse_option_chain_to_df(chunk_chain)
+                if not df_slice.empty:
+                    surface_slices.append(df_slice)
+            except APIRequestError as err:
+                logger.warning("Failed slice for %s on %s: %s", clean_sym, exp_date, err)
+                continue
+
+        if not surface_slices:
+            return pd.DataFrame()
+
+        df_full = pd.concat(surface_slices, ignore_index=True)
+        df_full.sort_values(by=["expiration", "strike", "side"], inplace=True)
+        df_full.reset_index(drop=True, inplace=True)
+        return df_full
 
 # ---------------------------------------------------------------------------
 # AUDIT WORKFLOW: COMPREHENSIVE 7-ENDPOINT CATALOG
