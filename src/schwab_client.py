@@ -3,37 +3,36 @@ schwab_client.py
 -----------------------------------------------------------------------------
 Institutional-Grade Charles Schwab OAuth2 & Market Data API Client.
 
-Designed for: Global Equity Strategy, Market Risk Management, and Quant Pipelines.
+Designed for: Global Equity Strategy, Market Risk Systems, and Quant Research.
 
-Key Architectural Guarantees:
-1. Enterprise Error Diagnostics & Correlation Tracking:
-   - Ingests and parses Schwab's structured JSON error schema:
-     {"errors": [{"status": ..., "title": ..., "detail": ..., "id": ...}]}
-   - Captures and surfaces Schwab diagnostic response headers:
-     'Schwab-Client-CorrelId' and 'Schwab-Resource-Version' across all failure modes.
-2. Callback URI Strict Validation:
-   - Enforces the 255-character maximum ceiling mandated by Developer Portal rules.
-   - Strictly validates the HTTPS protocol requirement for Login Micro Site (LMS).
-   - Prohibits embedded whitespace characters.
-   - Normalizes trailing slashes on bare host roots (e.g. 'https://127.0.0.1/' -> 'https://127.0.0.1')
+Core Architecture & Security Features:
+1. Strict Callback URL Verification:
+   - Validates URI length (<= 255 characters per Schwab portal constraints).
+   - Enforces HTTPS scheme as required by Schwab Login Micro Site (LMS).
+   - Rejects whitespace characters.
+   - Normalizes trailing slashes on bare host/IP roots (e.g., 'https://127.0.0.1/' -> 'https://127.0.0.1')
      to prevent byte-level string mismatches during token authorization.
-3. Cryptographic CSRF Defense (RFC 6749 Section 10.12):
-   - Supports cryptographically random state tokens on authorization requests.
-   - Verifies returned state parameter integrity before code exchange.
-4. Defense-in-Depth Token Security:
-   - Enforces POSIX 0o600 permissions at creation using low-level os.open flags
-     (O_CREAT | O_TRUNC | O_WRONLY | O_NOFOLLOW), eliminating umask race windows.
-5. High-Concurrency Thread Safety:
-   - Double-checked locking prevents multi-threaded refresh stampedes while maintaining
-     zero lock contention on fast-path memory reads.
-6. Resilient Transport Layer:
-   - Connection pool scaling via HTTPAdapter.
+2. Cryptographic CSRF Defense (RFC 6749 Section 10.12):
+   - Enforces state nonces across authorization requests and validates parity
+     prior to code exchange.
+3. Low-Level Token Storage Isolation:
+   - Uses low-level OS file descriptors (os.open with O_CREAT | O_TRUNC | O_WRONLY | O_NOFOLLOW)
+     with POSIX 0o600 permissions at creation, eliminating umask race windows.
+4. Concurrency & Thread Safety:
+   - Implements double-checked locking primitives to eliminate refresh stampedes
+     while maintaining zero lock contention on fast-path memory reads.
+5. Resilient Transport Layer:
+   - Hardened connection pooling via HTTPAdapter to prevent socket exhaustion.
    - Proactive early token renewal (60s buffer) + Reactive 401 self-healing recovery loop.
-   - HTTP 429 rate-limit adherence via RFC-7231 / seconds-based Retry-After parsing with jitter.
-   - Exponential backoff with entropy jitter on transient 5xx gateway errors.
-7. Agnostic Market Data Coverage:
-   - Native interfaces for all 7 Schwab Market Data endpoint families: Quotes,
-     Price History, Option Chains, Expiration Chains, Instruments, Movers, and Market Hours.
+   - HTTP 429 rate-limit adherence via RFC-7231 / integer Retry-After parsing with entropy jitter.
+   - Exponential backoff on transient 5xx server errors.
+6. Comprehensive Diagnostic Logging:
+   - Ingests Schwab's structured JSON error schema:
+     {"errors": [{"status": ..., "title": ..., "detail": ..., "id": ...}]}
+   - Surfaces 'Schwab-Client-CorrelId' and 'Schwab-Resource-Version' across all failure modes.
+7. Unbounded Asset Class Coverage:
+   - Parameterized access across all 7 Market Data endpoint families with zero
+     hard-coded ticker symbols.
 -----------------------------------------------------------------------------
 """
 
@@ -67,7 +66,7 @@ MARKETDATA_BASE = "https://api.schwabapi.com/marketdata/v1"
 DEFAULT_TIMEOUT: Tuple[float, float] = (3.05, 15.0)
 DEFAULT_RETRIES = 3
 DEFAULT_BACKOFF_FACTOR = 0.5
-TOKEN_EXPIRY_BUFFER = 60  # Early renewal buffer in seconds
+TOKEN_EXPIRY_BUFFER = 60  # Seconds before nominal expiry to proactively refresh
 
 logger = logging.getLogger("schwab_client")
 logger.addHandler(logging.NullHandler())
@@ -439,7 +438,6 @@ class SchwabClient:
     def refresh_access_token(self) -> TokenPayload:
         """Executes a silent token refresh using double-checked thread synchronization."""
         with self._tokens_lock:
-            # Re-check: Did another worker thread complete refresh while this thread was waiting?
             if self._token_payload and time.time() < (self._token_payload.expires_at - TOKEN_EXPIRY_BUFFER):
                 return self._token_payload
 
@@ -584,7 +582,7 @@ class SchwabClient:
         )
 
     # -----------------------------------------------------------------------
-    # ALL 7 SCHWAB MARKET DATA ENDPOINT FAMILIES
+    # ALL 7 SCHWAB MARKET DATA ENDPOINT FAMILIES (FULLY PARAMETERIZED)
     # -----------------------------------------------------------------------
     def get_quotes(
         self,
@@ -592,18 +590,18 @@ class SchwabClient:
         fields: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        1. Quotes: Real-time/delayed quotes for single or multiple equity/ETF/index symbols.
+        1. Quotes: Real-time/delayed quotes for single or multiple symbols.
         Parameters:
-            symbols: Single ticker or list/comma-delimited tickers (e.g. 'AAPL,MSFT,SPY').
+            symbols: Single ticker or list/comma-delimited tickers.
             fields: Comma-separated subset filter: 'quote,fundamental,extended,reference,regular'.
         """
         if isinstance(symbols, list):
-            clean_syms = ",".join(s.strip().upper() for s in symbols if s.strip())
+            clean_syms = ",".join(str(s).strip().upper() for s in symbols if str(s).strip())
         else:
-            clean_syms = ",".join(s.strip().upper() for s in symbols.split(",") if s.strip())
+            clean_syms = ",".join(str(s).strip().upper() for s in str(symbols).split(",") if str(s).strip())
 
         if not clean_syms:
-            raise ValueError("At least one valid ticker symbol is required.")
+            raise ValueError("Parameter 'symbols' must contain at least one valid ticker symbol.")
 
         params: Dict[str, Any] = {"symbols": clean_syms}
         if fields:
@@ -618,43 +616,50 @@ class SchwabClient:
         """
         Convenience method: Retrieves quote breakdown for a single isolated symbol.
         """
-        clean_sym = symbol.strip().upper()
-        if not clean_sym:
-            raise ValueError("Symbol must be a non-empty string.")
+        if not symbol or not str(symbol).strip():
+            raise ValueError("Parameter 'symbol' must be a non-empty string.")
 
-        # Resolves via standard /quotes endpoint with single ticker query
+        clean_sym = str(symbol).strip().upper()
         payload = self.get_quotes(symbols=clean_sym, fields=fields)
         return payload.get(clean_sym, payload)
 
     def get_price_history(
         self,
         symbol: str,
-        period_type: str = "day",
-        period: int = 5,
-        frequency_type: str = "minute",
-        frequency: int = 5,
+        period_type: str = "year",
+        period: int = 1,
+        frequency_type: str = "daily",
+        frequency: int = 1,
         start_date: Optional[int] = None,
         end_date: Optional[int] = None,
         need_extended_hours: bool = False,
     ) -> Dict[str, Any]:
         """
-        2. Price History: Historical OHLCV candle bars across custom time intervals.
+        2. Price History: Historical OHLCV candle bars across custom time horizons.
         Parameters:
+            symbol: Ticker symbol.
             period_type: 'day', 'month', 'year', or 'ytd'.
+            period: Lookback units (e.g., period=20 with period_type='year' pulls 20 years).
             frequency_type: 'minute', 'daily', 'weekly', or 'monthly'.
-            need_extended_hours: Set True to include pre/post-market candles.
+            frequency: Frequency multiplier (e.g., 1 for 1-day candles, 5 for 5-minute candles).
+            start_date: Start epoch in milliseconds.
+            end_date: End epoch in milliseconds.
+            need_extended_hours: Includes pre- and post-market trading sessions.
         """
+        if not symbol or not str(symbol).strip():
+            raise ValueError("Parameter 'symbol' must be a non-empty string.")
+
         params: Dict[str, Any] = {
-            "symbol": symbol.strip().upper(),
+            "symbol": str(symbol).strip().upper(),
             "periodType": period_type.lower(),
             "period": period,
             "frequencyType": frequency_type.lower(),
             "frequency": frequency,
             "needExtendedHoursData": str(need_extended_hours).lower(),
         }
-        if start_date:
+        if start_date is not None:
             params["startDate"] = start_date
-        if end_date:
+        if end_date is not None:
             params["endDate"] = end_date
         return self._execute_authenticated("/pricehistory", params=params)
 
@@ -662,7 +667,7 @@ class SchwabClient:
         self,
         symbol: str,
         contract_type: str = "ALL",
-        strike_count: Optional[int] = 8,
+        strike_count: Optional[int] = None,
         include_underlying_quote: bool = True,
         strategy: str = "SINGLE",
         interval: Optional[float] = None,
@@ -673,12 +678,20 @@ class SchwabClient:
         """
         3. Option Chains: Real-time strike matrix with implied volatility and Greeks.
         Parameters:
+            symbol: Underlying ticker symbol.
             contract_type: 'CALL', 'PUT', or 'ALL'.
+            strike_count: Number of strikes above/below ATM. Pass None for full unbounded chain.
             strategy: 'SINGLE', 'ANALYTICAL', 'COVERED', 'VERTICAL', etc.
-            strike_count: Number of strikes above and below the at-the-money price.
+            interval: Strike interval filter.
+            strike: Exact strike price filter.
+            from_date: Expiration filter start (YYYY-MM-DD).
+            to_date: Expiration filter end (YYYY-MM-DD).
         """
+        if not symbol or not str(symbol).strip():
+            raise ValueError("Parameter 'symbol' must be a non-empty string.")
+
         params: Dict[str, Any] = {
-            "symbol": symbol.strip().upper(),
+            "symbol": str(symbol).strip().upper(),
             "contractType": contract_type.upper(),
             "includeUnderlyingQuote": str(include_underlying_quote).lower(),
             "strategy": strategy.upper(),
@@ -699,35 +712,51 @@ class SchwabClient:
     def get_option_expirations(self, symbol: str) -> Dict[str, Any]:
         """
         4. Option Expiration Chain: Calendar list of active expiration dates and days-to-expiration (DTE).
+        Parameters:
+            symbol: Underlying ticker symbol.
         """
-        return self._execute_authenticated("/expirationchain", params={"symbol": symbol.strip().upper()})
+        if not symbol or not str(symbol).strip():
+            raise ValueError("Parameter 'symbol' must be a non-empty string.")
+
+        return self._execute_authenticated(
+            "/expirationchain",
+            params={"symbol": str(symbol).strip().upper()},
+        )
 
     def get_instruments(self, symbol: str, projection: str = "fundamental") -> Dict[str, Any]:
         """
         5. Instruments: Asset profiles, CUSIP identifiers, and fundamental balance sheet metrics.
         Parameters:
+            symbol: Ticker symbol.
             projection: 'symbol-search', 'symbol-regex', 'desc-search', or 'fundamental'.
         """
+        if not symbol or not str(symbol).strip():
+            raise ValueError("Parameter 'symbol' must be a non-empty string.")
+
         params = {
-            "symbol": symbol.strip().upper(),
+            "symbol": str(symbol).strip().upper(),
             "projection": projection.lower(),
         }
         return self._execute_authenticated("/instruments", params=params)
 
     def get_movers(
         self,
-        index_symbol: str = "$SPX",
+        index_symbol: str,
         sort_by: str = "VOLUME",
         frequency: int = 0,
     ) -> Dict[str, Any]:
         """
         6. Movers: Top market movers across benchmark indices ($SPX, $COMPX, $DJI).
         Parameters:
+            index_symbol: Index ticker (e.g., '$SPX', '$COMPX', '$DJI'). Required; no default.
             sort_by: 'VOLUME', 'TRADES', 'PERCENT_CHANGE_UP', or 'PERCENT_CHANGE_DOWN'.
-            frequency: 0 (default/all day) or specific interval window.
+            frequency: 0 (all day) or interval minutes (1, 5, 10, 30, 60).
         """
+        if not index_symbol or not str(index_symbol).strip():
+            raise ValueError("Parameter 'index_symbol' must be a non-empty string.")
+
         valid_indices = {"$SPX", "$COMPX", "$DJI"}
-        target = index_symbol.strip().upper()
+        target = str(index_symbol).strip().upper()
         if target not in valid_indices:
             raise ValueError(f"index_symbol must be one of {valid_indices}, got '{index_symbol}'")
 
@@ -739,7 +768,7 @@ class SchwabClient:
         """
         7. Market Hours: Trading session windows across equity, option, bond, and forex markets.
         Parameters:
-            markets: Comma-separated markets ('equity', 'option', 'bond', 'forex').
+            markets: Comma-separated list ('equity', 'option', 'bond', 'forex').
         """
         return self._execute_authenticated("/markets", params={"markets": markets.lower().strip()})
 
