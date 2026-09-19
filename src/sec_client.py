@@ -291,6 +291,64 @@ class SECClient:
 
         return data
 
+        # -------------------------------------------------------------------
+    # Internal raw-content GET helper
+    # -------------------------------------------------------------------
+
+    def _get_content(self, url: str) -> tuple[bytes, str]:
+        """
+        Perform a GET request and return the raw response content.
+
+        This method is intended for SEC resources that are not JSON,
+        such as filing HTML/text documents.
+
+        Args:
+            url:
+                Fully qualified SEC resource URL.
+
+        Returns:
+            Tuple containing:
+                - Raw response bytes.
+                - Response Content-Type header.
+
+        Raises:
+            SECRequestError:
+                Network failure or non-success HTTP status.
+            SECDataError:
+                Empty response content.
+        """
+
+        self._rate_limit()
+
+        try:
+            response = self.session.get(
+                url,
+                timeout=self.timeout,
+            )
+
+        except requests.RequestException as exc:
+            raise SECRequestError(
+                f"SEC request failed for URL '{url}': {exc}"
+            ) from exc
+
+        if response.status_code != 200:
+            raise SECRequestError(
+                "SEC returned HTTP "
+                f"{response.status_code} for URL '{url}'."
+            )
+
+        if not response.content:
+            raise SECDataError(
+                f"SEC returned empty content for URL '{url}'."
+            )
+
+        content_type = response.headers.get(
+            "Content-Type",
+            "",
+        ).strip()
+
+        return response.content, content_type
+
     # -------------------------------------------------------------------
     # Ticker map loading
     # -------------------------------------------------------------------
