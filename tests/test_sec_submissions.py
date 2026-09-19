@@ -22,33 +22,44 @@ from sec_client import (
     SECTickerNotFoundError,
 )
 
+from sec_client import (
+    SECClient,
+    SECConfigurationError,
+    SECRequestError,
+    SECTickerNotFoundError,
+)
+
 from sec_submissions import (
     SECFiling,
     SECSubmissionsDataError,
     SubmissionsClient,
 )
 
-
 # ---------------------------------------------------------------------------
 # Test fixtures
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-def mock_sec_client() -> Mock:
+def mock_sec_client() -> SECClient:
     """
-    Create a mocked SECClient.
+    Create a real SECClient whose network-facing methods are mocked.
 
-    The mock exposes only the SECClient methods required by
-    SubmissionsClient, preventing all real network activity.
+    SubmissionsClient requires an actual SECClient instance, while the
+    mocked methods prevent all live SEC requests during testing.
     """
 
-    client = Mock()
+    client = SECClient(
+        name="Test Application",
+        email="test@example.com",
+        organization="Test Organization",
+    )
 
-    # Configure the ticker resolver with a deterministic test CIK.
-    client.get_cik_by_ticker.return_value = 789019
+    client._get_json = Mock()
+    client.get_cik_by_ticker = Mock(return_value=789019)
+
+    #assert isinstance(client._get_json, Mock)
 
     return client
-
 
 @pytest.fixture
 def submissions_client(mock_sec_client: Mock) -> SubmissionsClient:
