@@ -50,7 +50,13 @@ def test_msft_live_submissions() -> None:
     assert all(filing.form for filing in filings)
     assert all(filing.accession_number for filing in filings)
     assert all(filing.filing_date for filing in filings)
-    assert all(filing.report_date for filing in filings)
+    
+    # Report dates are optional because SEC does not provide
+    # reportDate for every filing type.
+    assert all(
+      filing.report_date is None or isinstance(filing.report_date, str)
+      for filing in filings
+      )
 
     # Confirm accession numbers use the expected SEC format.
     assert all(
