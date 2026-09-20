@@ -1,110 +1,55 @@
-"""
-Temporary SEC-5.3 diagnostic for the real MSFT 8-K extractor failure.
+"""Focused live diagnostic for SEC filing section extraction."""
 
-This test reuses the exact production discovery/retrieval path already proven
-by tests/test_sec_filing_extractors_live.py. It does not modify production
-code or invoke the section extractor.
+import os
 
-The purpose is to expose the raw HTML structure of the selected 8-K so the
-production defect can be classified before changing sec_filing_extractors.py.
-"""
+import pytest
 
-from __future__ import annotations
-
-import re
-
-from test_sec_filing_extractors_live import (
-    _find_first_filing,
-    _get_recent_filings,
-)
+from sec_client import SECClient
+from sec_filing_extractors import extract_sections
+from sec_filings import SECFilingsClient
+from sec_submissions import SubmissionsClient
 
 
-def _print_raw_item_matches(content: bytes) -> None:
-    """Print bounded raw HTML surrounding recognized 8-K item text."""
+SEC_NAME = os.getenv("SEC_TEST_NAME", "Schwab Market Data Pilot")
+SEC_EMAIL = os.getenv("SEC_TEST_EMAIL", "YOUR_EMAIL@example.com")
+SEC_ORGANIZATION = os.getenv("SEC_TEST_ORGANIZATION", "Schwab Market Data Pilot")
+TEST_TICKER = "MSFT"
 
-    pattern = re.compile(
-        rb"(?i)\bitem\s+[0-9]+\.[0-9]{2}\b"
+
+def _create_live_clients():
+    """Create the SEC clients used by the diagnostic."""
+    if (
+        not SEC_EMAIL
+        or SEC_EMAIL == "YOUR_EMAIL@example.com"
+        or "@" not in SEC_EMAIL
+    ):
+        pytest.skip("Set SEC_TEST_EMAIL to run live SEC diagnostics.")
+
+    client = SECClient(
+        name=SEC_NAME,
+        email=SEC_EMAIL,
+        organization=SEC_ORGANIZATION,
     )
 
-    matches = list(pattern.finditer(content))
-
-    print(f"\nRAW ITEM MATCH COUNT: {len(matches)}")
-
-    for index, match in enumerate(matches[:20], start=1):
-        start = max(0, match.start() - 300)
-        end = min(len(content), match.end() + 700)
-
-        print(
-            f"\n--- RAW ITEM MATCH {index} "
-            f"OFFSET={match.start()} ---"
-        )
-
-        print(
-            content[start:end].decode(
-                "utf-8",
-                errors="replace",
-            )
-        )
+    return client, SubmissionsClient(client), SECFilingsClient(client)
 
 
-def _print_html_heading_candidates(content: bytes) -> None:
-    """
-    Print heading-like HTML elements containing 8-K item text.
-
-    This is diagnostic only. It intentionally uses raw bytes so that the
-    evidence remains independent of parser-normalized offsets.
-    """
-
-    pattern = re.compile(
-        rb"(?is)"
-        rb"<(h1|h2|h3|h4|h5|h6|p|div|span|td|th)"
-        rb"\b[^>]*>"
-        rb".{0,5000}?"
-        rb"\bitem\s+[0-9]+\.[0-9]{2}\b"
-        rb".{0,5000}?"
-        rb"</\1\s*>"
-    )
-
-    matches = list(pattern.finditer(content))
-
-    print(
-        "\nHEADING-LIKE ELEMENT MATCH COUNT: "
-        f"{len(matches)}"
-    )
-
-    for index, match in enumerate(matches[:20], start=1):
-        print(
-            f"\n--- HEADING-LIKE ELEMENT {index} "
-            f"OFFSET={match.start()} ---"
-        )
-
-        print(
-            match.group(0).decode(
-                "utf-8",
-                errors="replace",
-            )[:6000]
-        )
-
-
-def test_debug_msft_live_8k_structure() -> None:
-    """Expose the raw structure of the same MSFT 8-K selected by SEC-5.3."""
-
-    (
-        client,
-        _submissions_client,
-        filings_client,
-        filings,
-    ) = _get_recent_filings()
+def test_msft_live_8k_extraction_diagnostic():
+    """Print diagnostic information for the first recent MSFT 8-K."""
+    client, submissions_client, filings_client = _create_live_clients()
 
     try:
-        filing = _find_first_filing(
-            filings,
-            "8-K",
+        filings = submissions_client.get_recent_filings_by_ticker(TEST_TICKER)
+        filing = next(
+            (item for item in filings if item.form == "8-K"),
+            None,
         )
 
-        document = filings_client.get_primary_document(
-            filing,
-        )
+        if filing is None:
+            pytest.fail("No recent MSFT 8-K filing was found.")
+
+        document = filings_client.get_primary_document(filing)
+        sections = extract_sections(document)
 
         print("\n================ FILING ================")
         print(f"CIK:              {filing.cik}")
@@ -122,8 +67,15 @@ def test_debug_msft_live_8k_structure() -> None:
         print(f"CONTENT HASH:     {document.content_hash}")
         print(f"SOURCE URL:       {document.source_url}")
 
-        _print_raw_item_matches(document.content)
-        _print_html_heading_candidates(document.content)
+        print("\n================ SECTIONS ================")
+        print(f"SECTION COUNT:    {len(sections)}")
+
+        for section in sections:
+            print(
+                f"{section.section_id}: "
+                f"{section.start_offset}:{section.end_offset} "
+                f"occurrence={section.occurrence}"
+            )
 
     finally:
         client.close()
