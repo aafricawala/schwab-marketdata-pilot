@@ -17,12 +17,6 @@ from unittest.mock import Mock
 import pytest
 
 from sec_client import (
-    SECConfigurationError,
-    SECRequestError,
-    SECTickerNotFoundError,
-)
-
-from sec_client import (
     SECClient,
     SECConfigurationError,
     SECRequestError,
