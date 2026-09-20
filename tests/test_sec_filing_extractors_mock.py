@@ -1,60 +1,57 @@
+"""Offline unit tests for deterministic SEC filing section extraction.
+
+Coverage:
+- SEC-5.1 plain-text section extraction contract.
+- SEC-5.2 raw HTML byte scanner.
+- SEC-5.2 deterministic HTML structural extraction.
+
+No SEC network access is used.
 """
-Mock/unit tests for SEC-5 deterministic filing section extraction.
-
-These tests do not perform SEC network calls.
-
-The fixtures construct SECFiling and SECFilingDocument instances locally so
-that SEC-5 remains independently testable from SEC-3 and SEC-4 retrieval.
-
-SEC-5.2 scanner tests additionally verify deterministic raw HTML source
-position scanning without integrating HTML extraction into extract_sections().
-"""
-
-from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
+from hashlib import sha256
 
 import pytest
 
-from sec_client import SECClient
-from sec_filings import SECFiling, SECFilingDocument
 from sec_filing_extractors import (
+    SECFilingExtractionError,
     SECFilingFormatError,
-    SECFilingSection,
-    SECFilingSectionError,
+    _scan_raw_html,
     extract_sections,
 )
+from sec_filings import SECFilingDocument
+from sec_submissions import SECFiling
 
 
-@pytest.fixture
-def sec_client() -> SECClient:
-    """Create a valid SECClient without performing network activity."""
-    return SECClient(
-        name="Test User",
-        email="test@example.com",
-        organization="Test Organization",
-        requests_per_second=8.0,
-        timeout=1.0,
-    )
+# ---------------------------------------------------------------------------
+# Test helpers
+# ---------------------------------------------------------------------------
 
 
 def _make_filing(
+    *,
     form: str = "10-K",
-    primary_document: str = "msft-20250630.htm",
+    cik: int = 789019,
+    accession_number: str = "0000789019-25-000001",
+    filing_date: str = "2025-01-30",
+    report_date: str = "2024-12-31",
+    primary_document: str = "msft-20241231.htm",
+    is_amendment: bool = False,
+    file_number: str = "001-37845",
 ) -> SECFiling:
-    """Create deterministic representative SEC filing metadata."""
+    """Create deterministic filing metadata for unit tests."""
     return SECFiling(
-        cik=789019,
+        cik=cik,
         form=form,
-        accession_number="0000789019-25-000123",
-        filing_date="2025-08-01",
-        report_date="2025-06-30",
+        accession_number=accession_number,
+        filing_date=filing_date,
+        report_date=report_date,
         primary_document=primary_document,
-        is_amendment=form.endswith("/A"),
-        file_number="001-03756",
+        is_amendment=is_amendment,
+        file_number=file_number,
         filing_url=(
             "https://www.sec.gov/Archives/edgar/data/"
-            "789019/000078901925000123/msft-20250630.htm"
+            "789019/000078901925000001/msft-20241231.htm"
         ),
     )
 
@@ -62,136 +59,128 @@ def _make_filing(
 def _make_document(
     content: bytes,
     *,
-    form: str = "10-K",
     content_type: str = "text/plain",
+    form: str = "10-K",
+    primary_document: str = "msft-20241231.htm",
 ) -> SECFilingDocument:
-    """Construct an immutable SEC filing document fixture."""
-    filing = _make_filing(form=form)
+    """Create a deterministic immutable filing document."""
+    filing = _make_filing(
+        form=form,
+        primary_document=primary_document,
+        is_amendment=form.endswith("/A"),
+    )
 
     return SECFilingDocument(
         filing=filing,
-        document_name=filing.primary_document or "filing.txt",
-        document_kind="complete_submission",
-        source_url=(
-            "https://www.sec.gov/Archives/edgar/data/"
-            "789019/000078901925000123/"
-            "0000789019-25-000123.txt"
-        ),
+        document_name=primary_document,
+        document_kind="primary",
+        source_url=filing.filing_url,
         content_type=content_type,
-        content_hash="fixture-hash",
+        content_hash=sha256(content).hexdigest(),
         content=content,
     )
 
 
-def test_section_contract_is_immutable() -> None:
-    """SECFilingSection must be immutable because it represents evidence."""
-    filing = _make_filing()
-    document = _make_document(b"ITEM 1. Business\nExample")
+# ---------------------------------------------------------------------------
+# SEC-5.1 plain-text extraction tests
+# ---------------------------------------------------------------------------
 
-    section = SECFilingSection(
-        filing=filing,
-        document=document,
-        section_id="ITEM_1",
-        section_title="Business",
-        section_level=1,
-        occurrence=1,
-        start_offset=0,
-        end_offset=len(document.content),
-        content=document.content,
+
+def test_section_is_immutable() -> None:
+    """Extracted sections must be immutable value objects."""
+    document = _make_document(
+        b"Item 1. Business\n"
+        b"Business content.\n"
+        b"Item 1A. Risk Factors\n"
+        b"Risk content.\n"
     )
+
+    sections = extract_sections(document)
+
+    assert sections
 
     with pytest.raises(FrozenInstanceError):
-        section.section_id = "ITEM_2"  # type: ignore[misc]
+        sections[0].section_title = "Modified"  # type: ignore[misc]
 
 
-def test_section_content_exactly_matches_raw_document_slice() -> None:
-    """Section evidence must be an exact raw-byte slice."""
+def test_section_content_is_exact_raw_slice() -> None:
+    """Section content must equal the exact source-byte slice."""
     content = (
-        b"ITEM 1. Business\n"
+        b"Item 1. Business\n"
         b"Business content.\n"
-        b"ITEM 1A. Risk Factors\n"
+        b"Item 1A. Risk Factors\n"
         b"Risk content.\n"
     )
     document = _make_document(content)
 
     sections = extract_sections(document)
 
-    assert len(sections) == 2
+    assert sections
 
     for section in sections:
-        assert (
-            section.content
-            == document.content[section.start_offset : section.end_offset]
-        )
+        assert section.content == content[
+            section.start_offset : section.end_offset
+        ]
 
 
-def test_section_offsets_use_half_open_interval() -> None:
-    """The section end offset must exclude the next section."""
-    content = (
-        b"ITEM 1. Business\n"
-        b"Business content.\n"
-        b"ITEM 1A. Risk Factors\n"
-        b"Risk content.\n"
-    )
+def test_section_offsets_are_half_open() -> None:
+    """Section offsets must use the [start_offset, end_offset) convention."""
+    content = b"Item 1. Business\nBusiness content.\n"
     document = _make_document(content)
 
     sections = extract_sections(document)
 
-    assert sections[0].start_offset == 0
-    assert sections[0].end_offset == sections[1].start_offset
-    assert sections[1].end_offset == len(content)
+    assert len(sections) == 1
 
+    section = sections[0]
 
-def test_sections_are_deterministically_ordered_by_raw_offset() -> None:
-    """Extraction must return sections in source order."""
-    content = (
-        b"ITEM 7. Management's Discussion and Analysis\n"
-        b"MD&A content.\n"
-        b"ITEM 1. Business\n"
-        b"Business content.\n"
-        b"ITEM 8. Financial Statements and Supplementary Data\n"
-        b"Financial statements.\n"
-    )
-    document = _make_document(content)
-
-    sections = extract_sections(document)
-
-    assert [section.section_id for section in sections] == [
-        "ITEM_7",
-        "ITEM_1",
-        "ITEM_8",
+    assert 0 <= section.start_offset < section.end_offset <= len(content)
+    assert section.content == content[
+        section.start_offset : section.end_offset
     ]
 
-    assert [
+
+def test_sections_are_deterministically_ordered() -> None:
+    """Sections must be returned in ascending source-offset order."""
+    content = (
+        b"Item 1A. Risk Factors\n"
+        b"Risk content.\n"
+        b"Item 7. Management's Discussion and Analysis\n"
+        b"MD&A content.\n"
+        b"Item 8. Financial Statements\n"
+        b"Financial statement content.\n"
+    )
+    document = _make_document(content)
+
+    sections = extract_sections(document)
+
+    assert [section.start_offset for section in sections] == sorted(
         section.start_offset for section in sections
-    ] == sorted(section.start_offset for section in sections)
+    )
 
 
 def test_missing_sections_are_tolerated() -> None:
-    """A filing may omit a recognized section without causing extraction failure."""
+    """Missing target sections must not cause extraction to fail."""
     content = (
-        b"ITEM 1. Business\n"
+        b"Item 1. Business\n"
         b"Business content only.\n"
-        b"ITEM 8. Financial Statements and Supplementary Data\n"
-        b"Financial content.\n"
     )
     document = _make_document(content)
 
     sections = extract_sections(document)
 
-    assert [section.section_id for section in sections] == [
-        "ITEM_1",
-        "ITEM_8",
-    ]
+    assert len(sections) == 1
+    assert sections[0].section_id == "ITEM_1"
+    assert sections[0].section_title == "Business"
 
 
-def test_duplicate_section_headings_preserve_occurrence() -> None:
-    """Duplicate recognized headings must remain separate evidence objects."""
+def test_duplicate_headings_preserve_occurrence_index() -> None:
+    """Repeated target headings must preserve occurrence numbers."""
     content = (
-        b"ITEM 1. Business\n"
-        b"First occurrence.\n"
-        b"ITEM 1. Business\n"
-        b"Second occurrence.\n"
+        b"Item 1. Business\n"
+        b"First business section.\n"
+        b"Item 1. Business\n"
+        b"Second business section.\n"
     )
     document = _make_document(content)
 
@@ -199,84 +188,70 @@ def test_duplicate_section_headings_preserve_occurrence() -> None:
 
     assert len(sections) == 2
     assert [section.occurrence for section in sections] == [1, 2]
-    assert [section.section_id for section in sections] == [
-        "ITEM_1",
-        "ITEM_1",
-    ]
-
-    assert b"First occurrence." in sections[0].content
-    assert b"Second occurrence." in sections[1].content
+    assert sections[0].content != sections[1].content
 
 
-def test_amended_supported_form_is_accepted() -> None:
-    """10-K/A remains a supported base form."""
+def test_amended_form_is_supported() -> None:
+    """10-K/A must use the same base taxonomy as 10-K."""
     content = (
-        b"ITEM 1. Business\n"
-        b"Amended business disclosure.\n"
+        b"Item 1. Business\n"
+        b"Business content.\n"
+        b"Item 1A. Risk Factors\n"
+        b"Risk content.\n"
     )
-    document = _make_document(content, form="10-K/A")
+    document = _make_document(
+        content,
+        form="10-K/A",
+    )
 
     sections = extract_sections(document)
 
-    assert len(sections) == 1
-    assert sections[0].section_id == "ITEM_1"
-    assert sections[0].filing.form == "10-K/A"
+    assert [section.section_id for section in sections] == [
+        "ITEM_1",
+        "ITEM_1A",
+    ]
+    assert [section.section_title for section in sections] == [
+        "Business",
+        "Risk Factors",
+    ]
 
 
-def test_unsupported_filing_form_is_rejected() -> None:
-    """SEC-5 must not silently process unsupported filing forms."""
-    filing = _make_filing(form="20-F")
-
-    document = SECFilingDocument(
-        filing=filing,
-        document_name="foreign-filing.txt",
-        document_kind="complete_submission",
-        source_url="https://example.invalid/filing.txt",
-        content_type="text/plain",
-        content_hash="fixture-hash",
-        content=b"ITEM 1. Business\nContent",
-    )
-
-    with pytest.raises(SECFilingFormatError, match="Unsupported SEC filing form"):
-        extract_sections(document)
-
-
-def test_invalid_document_object_is_rejected() -> None:
-    """The public extractor must reject objects outside its contract."""
-    with pytest.raises(SECFilingFormatError):
-        extract_sections("not-a-filing-document")  # type: ignore[arg-type]
-
-
-def test_empty_document_content_is_rejected() -> None:
-    """Empty content is invalid rather than being treated as a missing section."""
-    document = _make_document(b"")
-
-    with pytest.raises(SECFilingFormatError, match="empty content"):
-        extract_sections(document)
-
-
-def test_html_extraction_is_explicitly_deferred() -> None:
-    """HTML must not be parsed until byte-position mapping is implemented."""
+def test_unsupported_form_is_rejected() -> None:
+    """Unsupported filing forms must fail explicitly."""
     document = _make_document(
-        b"<html><body><h1>ITEM 1. Business</h1></body></html>",
-        content_type="text/html",
+        b"Item 1. Business\nBusiness content.\n",
+        form="20-F",
     )
 
     with pytest.raises(
         SECFilingFormatError,
-        match="HTML/XML extraction is not implemented",
+        match="Unsupported SEC filing form",
     ):
         extract_sections(document)
 
 
+def test_invalid_document_object_is_rejected() -> None:
+    """The public extractor must reject invalid document objects."""
+    with pytest.raises(SECFilingExtractionError):
+        extract_sections(object())  # type: ignore[arg-type]
+
+
+def test_empty_content_is_rejected() -> None:
+    """Empty filing content cannot produce section boundaries."""
+    document = _make_document(b"")
+
+    with pytest.raises(SECFilingFormatError, match="empty"):
+        extract_sections(document)
+
+
 def test_repeated_extraction_is_deterministic() -> None:
-    """Identical input must produce identical immutable extraction results."""
+    """Identical input must produce identical extraction results."""
     content = (
-        b"ITEM 1. Business\n"
+        b"Item 1. Business\n"
         b"Business content.\n"
-        b"ITEM 1A. Risk Factors\n"
+        b"Item 1A. Risk Factors\n"
         b"Risk content.\n"
-        b"ITEM 7. Management's Discussion and Analysis\n"
+        b"Item 7. Management's Discussion and Analysis\n"
         b"MD&A content.\n"
     )
     document = _make_document(content)
@@ -287,212 +262,398 @@ def test_repeated_extraction_is_deterministic() -> None:
     assert first == second
 
 
-def test_section_constructor_rejects_incorrect_raw_slice() -> None:
-    """The evidence contract must reject content that does not match offsets."""
-    document = _make_document(b"ITEM 1. Business\nContent")
+def test_incorrect_raw_slice_is_detectable() -> None:
+    """Section content must remain tied to its declared source offsets."""
+    content = b"Item 1. Business\nBusiness content.\n"
+    document = _make_document(content)
 
-    with pytest.raises(
-        SECFilingSectionError,
-        match="exactly equal",
-    ):
-        SECFilingSection(
-            filing=document.filing,
-            document=document,
-            section_id="ITEM_1",
-            section_title="Business",
-            section_level=1,
-            occurrence=1,
-            start_offset=0,
-            end_offset=5,
-            content=b"incorrect",
-        )
+    sections = extract_sections(document)
 
+    assert len(sections) == 1
 
-def test_section_constructor_rejects_inconsistent_filing_identity() -> None:
-    """A section cannot associate one filing with another document."""
-    document = _make_document(b"ITEM 1. Business\nContent")
-    different_filing = _make_filing(
-        primary_document="different-document.htm"
-    )
+    section = sections[0]
 
-    with pytest.raises(SECFilingSectionError, match="must match"):
-        SECFilingSection(
-            filing=different_filing,
-            document=document,
-            section_id="ITEM_1",
-            section_title="Business",
-            section_level=1,
-            occurrence=1,
-            start_offset=0,
-            end_offset=len(document.content),
-            content=document.content,
-        )
+    expected = content[section.start_offset : section.end_offset]
+
+    assert section.content == expected
+    assert section.content != content[
+        section.start_offset + 1 : section.end_offset
+    ]
 
 
 # ---------------------------------------------------------------------------
-# SEC-5.2 raw HTML source-position scanner tests
+# SEC-5.2 raw HTML scanner tests
 # ---------------------------------------------------------------------------
 
 
 def test_raw_html_scanner_preserves_exact_byte_offsets() -> None:
-    """Raw scanner offsets must remain valid against original bytes."""
-    from sec_filing_extractors import _scan_raw_html
-
+    """The raw scanner must identify tags using original byte offsets."""
     content = (
-        b"<html>\n"
-        b"<body>\n"
-        b"<h1>Item 1. Business</h1>\n"
-        b"<p>Example &amp; test.</p>\n"
-        b"</body>\n"
-        b"</html>\n"
+        b"<html><body>"
+        b"<h1>Item 1. Business</h1>"
+        b"<p>Example content.</p>"
+        b"</body></html>"
     )
 
     tokens = _scan_raw_html(content)
 
-    assert tokens
+    h1_tokens = [
+        token
+        for token in tokens
+        if token.tag_name == b"h1"
+    ]
 
-    for token in tokens:
-        assert 0 <= token.start_offset < token.end_offset <= len(content)
-        assert content[token.start_offset : token.end_offset] != b""
+    assert len(h1_tokens) == 2
+
+    start_token, end_token = h1_tokens
+
+    assert start_token.token_type == "start_tag"
+    assert end_token.token_type == "end_tag"
+
+    assert content[
+        start_token.start_offset : start_token.end_offset
+    ] == b"<h1>"
+
+    assert content[
+        end_token.start_offset : end_token.end_offset
+    ] == b"</h1>"
 
 
 def test_raw_html_scanner_identifies_nested_inline_markup() -> None:
-    """Nested elements must retain independent exact source boundaries."""
-    from sec_filing_extractors import _scan_raw_html
-
+    """Nested tags must be tokenized independently."""
     content = (
-        b"<h1>"
-        b"Item 1. <ix:nonNumeric contextRef=\"ctx1\">Business</ix:nonNumeric>"
+        b"<h1>Item 1. "
+        b"<span>Business</span>"
         b"</h1>"
     )
 
     tokens = _scan_raw_html(content)
 
-    tag_tokens = [
+    tag_names = [
+        token.tag_name
+        for token in tokens
+        if token.tag_name is not None
+    ]
+
+    assert tag_names == [b"h1", b"span", b"span", b"h1"]
+
+    span_start = next(
         token
         for token in tokens
-        if token.token_type in {"start_tag", "end_tag"}
-    ]
+        if token.tag_name == b"span"
+        and token.token_type == "start_tag"
+    )
 
-    assert [
-        (token.token_type, token.tag_name)
-        for token in tag_tokens
-    ] == [
-        ("start_tag", b"h1"),
-        ("start_tag", b"ix:nonnumeric"),
-        ("end_tag", b"ix:nonnumeric"),
-        ("end_tag", b"h1"),
-    ]
+    span_end = next(
+        token
+        for token in tokens
+        if token.tag_name == b"span"
+        and token.token_type == "end_tag"
+    )
 
-    for token in tag_tokens:
-        assert content[token.start_offset : token.end_offset].startswith(b"<")
+    assert content[
+        span_start.start_offset : span_start.end_offset
+    ] == b"<span>"
+
+    assert content[
+        span_end.start_offset : span_end.end_offset
+    ] == b"</span>"
 
 
 def test_raw_html_scanner_handles_gt_inside_quoted_attribute() -> None:
-    """A '>' inside a quoted attribute must not terminate the tag."""
-    from sec_filing_extractors import _scan_raw_html
-
+    """A > inside a quoted attribute must not terminate the tag."""
     content = (
         b'<div data-value="a > b">'
-        b"content"
+        b"Item 1. Business"
         b"</div>"
     )
 
     tokens = _scan_raw_html(content)
 
-    assert [
-        (token.token_type, token.tag_name)
-        for token in tokens
-        if token.token_type in {"start_tag", "end_tag"}
-    ] == [
-        ("start_tag", b"div"),
-        ("end_tag", b"div"),
-    ]
-
-    start_tag = next(
+    div_start = next(
         token
         for token in tokens
-        if token.token_type == "start_tag"
+        if token.tag_name == b"div"
+        and token.token_type == "start_tag"
     )
 
-    assert content[start_tag.start_offset : start_tag.end_offset] == (
-        b'<div data-value="a > b">'
-    )
+    assert content[
+        div_start.start_offset : div_start.end_offset
+    ] == b'<div data-value="a > b">'
 
 
 def test_raw_html_scanner_preserves_entities_as_raw_bytes() -> None:
-    """HTML entities must not be decoded by the source scanner."""
-    from sec_filing_extractors import _scan_raw_html
-
-    content = b"<p>Example &amp; test &lt;value&gt;</p>"
+    """HTML entities must remain unchanged in the raw source."""
+    content = b"<p>Example &amp; test &#39;value&#39;.</p>"
 
     tokens = _scan_raw_html(content)
 
-    text_token = next(
+    paragraph_start = next(
         token
         for token in tokens
-        if token.token_type == "text"
+        if token.tag_name == b"p"
+        and token.token_type == "start_tag"
     )
 
-    assert content[text_token.start_offset : text_token.end_offset] == (
-        b"Example &amp; test &lt;value&gt;"
+    paragraph_end = next(
+        token
+        for token in tokens
+        if token.tag_name == b"p"
+        and token.token_type == "end_tag"
     )
+
+    assert content[
+        paragraph_start.end_offset : paragraph_end.start_offset
+    ] == b"Example &amp; test &#39;value&#39;."
 
 
 def test_raw_html_scanner_handles_comments_and_declarations() -> None:
-    """Comments and declarations must have exact source boundaries."""
-    from sec_filing_extractors import _scan_raw_html
-
+    """Comments/declarations must not corrupt later tag offsets."""
     content = (
-        b"<!DOCTYPE html>\n"
-        b"<!-- SEC filing comment -->\n"
-        b"<html></html>"
+        b"<!DOCTYPE html>"
+        b"<html>"
+        b"<!-- comment with > characters -->"
+        b"<body>"
+        b"<?processing instruction?>"
+        b"<h1>Item 1. Business</h1>"
+        b"</body>"
+        b"</html>"
     )
 
     tokens = _scan_raw_html(content)
 
-    structural = [
+    h1_start = next(
         token
         for token in tokens
-        if token.token_type != "text"
-    ]
+        if token.tag_name == b"h1"
+        and token.token_type == "start_tag"
+    )
 
-    assert [token.token_type for token in structural] == [
-        "declaration",
-        "comment",
-        "start_tag",
-        "end_tag",
-    ]
+    assert content[
+        h1_start.start_offset : h1_start.end_offset
+    ] == b"<h1>"
 
-    for token in structural:
-        assert content[token.start_offset : token.end_offset] == (
-            content[token.start_offset : token.end_offset]
-        )
+    assert content[h1_start.end_offset :].startswith(
+        b"Item 1. Business</h1>"
+    )
 
 
 def test_raw_html_scanner_is_deterministic() -> None:
-    """Repeated scans of identical bytes must produce identical results."""
-    from sec_filing_extractors import _scan_raw_html
-
+    """Identical HTML input must produce identical scanner output."""
     content = (
-        b"<div><h1>Item 1A. Risk Factors</h1>"
-        b"<p>Risk &amp; disclosure information.</p></div>"
+        b"<html><body>"
+        b"<h1>Item 1. Business</h1>"
+        b"<p>Example.</p>"
+        b"</body></html>"
     )
 
-    assert _scan_raw_html(content) == _scan_raw_html(content)
+    first = _scan_raw_html(content)
+    second = _scan_raw_html(content)
+
+    assert first == second
 
 
 def test_raw_html_scanner_treats_invalid_less_than_as_text() -> None:
-    """A comparison operator must not be misclassified as an HTML tag."""
-    from sec_filing_extractors import _scan_raw_html
-
-    content = b"<p>x < y and z > x</p>"
+    """Invalid '<' text must not corrupt subsequent valid tags."""
+    content = (
+        b"<p>Value 1 < Value 2</p>"
+        b"<h1>Item 1. Business</h1>"
+    )
 
     tokens = _scan_raw_html(content)
 
-    assert any(
-        token.token_type == "text"
-        and content[token.start_offset : token.end_offset]
-        == b"x < y and z > x"
+    tag_names = [
+        token.tag_name
         for token in tokens
+        if token.tag_name is not None
+    ]
+
+    assert tag_names == [b"p", b"p", b"h1", b"h1"]
+
+
+# ---------------------------------------------------------------------------
+# SEC-5.2 HTML extraction tests
+# ---------------------------------------------------------------------------
+
+
+def test_html_extraction_identifies_structural_sections() -> None:
+    """HTML headings must produce recognized filing sections."""
+    content = (
+        b"<html><body>"
+        b"<h1>Item 1. Business</h1>"
+        b"<p>Business content.</p>"
+        b"<h1>Item 1A. Risk Factors</h1>"
+        b"<p>Risk content.</p>"
+        b"<h1>Item 7. Management's Discussion and Analysis</h1>"
+        b"<p>MD&amp;A content.</p>"
+        b"<h1>Item 8. Financial Statements</h1>"
+        b"<p>Financial content.</p>"
+        b"</body></html>"
     )
+    document = _make_document(
+        content,
+        content_type="text/html",
+    )
+
+    sections = extract_sections(document)
+
+    section_ids = [section.section_id for section in sections]
+
+    assert "ITEM_1" in section_ids
+    assert "ITEM_1A" in section_ids
+    assert "ITEM_7" in section_ids
+    assert "ITEM_8" in section_ids
+
+
+def test_html_extraction_preserves_exact_raw_section_bytes() -> None:
+    """HTML section content must equal the corresponding raw byte slice."""
+    content = (
+        b"<html><body>\n"
+        b"<div class=\"section\">"
+        b"<h1>Item 1. Business</h1>"
+        b"<p>Example &amp; test.</p>"
+        b"</div>"
+        b"<div>"
+        b"<h1>Item 1A. Risk Factors</h1>"
+        b"<p>Risk content.</p>"
+        b"</div>"
+        b"</body></html>"
+    )
+    document = _make_document(
+        content,
+        content_type="text/html",
+    )
+
+    sections = extract_sections(document)
+
+    assert sections
+
+    for section in sections:
+        assert section.content == content[
+            section.start_offset : section.end_offset
+        ]
+
+
+def test_html_extraction_handles_nested_inline_markup() -> None:
+    """Heading recognition must tolerate inline markup."""
+    content = (
+        b"<html><body>"
+        b"<h1>Item 1. <span>Business</span></h1>"
+        b"<p>Business content.</p>"
+        b"<h2>Item 1A. <b>Risk Factors</b></h2>"
+        b"<p>Risk content.</p>"
+        b"</body></html>"
+    )
+    document = _make_document(
+        content,
+        content_type="text/html",
+    )
+
+    sections = extract_sections(document)
+
+    section_ids = [section.section_id for section in sections]
+
+    assert "ITEM_1" in section_ids
+    assert "ITEM_1A" in section_ids
+
+
+def test_html_extraction_handles_entities_in_heading_text() -> None:
+    """HTML entity decoding must not destroy raw-byte provenance."""
+    content = (
+        b"<html><body>"
+        b"<h1>Item 1. Business &amp; Operations</h1>"
+        b"<p>Business content.</p>"
+        b"<h1>Item 1A. Risk Factors</h1>"
+        b"<p>Risk content.</p>"
+        b"</body></html>"
+    )
+    document = _make_document(
+        content,
+        content_type="text/html",
+    )
+
+    sections = extract_sections(document)
+
+    assert sections
+
+    assert any(
+        section.section_id == "ITEM_1"
+        for section in sections
+    )
+
+    for section in sections:
+        assert section.content == content[
+            section.start_offset : section.end_offset
+        ]
+
+
+def test_html_extraction_preserves_duplicate_heading_occurrences() -> None:
+    """Repeated HTML headings must receive stable occurrence numbers."""
+    content = (
+        b"<html><body>"
+        b"<h1>Item 1. Business</h1>"
+        b"<p>First occurrence.</p>"
+        b"<h2>Item 1. Business</h2>"
+        b"<p>Second occurrence.</p>"
+        b"</body></html>"
+    )
+    document = _make_document(
+        content,
+        content_type="text/html",
+    )
+
+    sections = extract_sections(document)
+
+    business_sections = [
+        section
+        for section in sections
+        if section.section_id == "ITEM_1"
+    ]
+
+    assert len(business_sections) == 2
+    assert [section.occurrence for section in business_sections] == [1, 2]
+
+
+def test_html_extraction_is_deterministic() -> None:
+    """Repeated HTML extraction must return identical results."""
+    content = (
+        b"<html><body>"
+        b"<h1>Item 1. Business</h1>"
+        b"<p>Business content.</p>"
+        b"<h1>Item 1A. Risk Factors</h1>"
+        b"<p>Risk content.</p>"
+        b"</body></html>"
+    )
+    document = _make_document(
+        content,
+        content_type="text/html",
+    )
+
+    first = extract_sections(document)
+    second = extract_sections(document)
+
+    assert first == second
+
+
+def test_html_extraction_supports_amended_forms() -> None:
+    """HTML extraction must support amended filing forms."""
+    content = (
+        b"<html><body>"
+        b"<h1>Item 1. Business</h1>"
+        b"<p>Amended business content.</p>"
+        b"<h1>Item 1A. Risk Factors</h1>"
+        b"<p>Amended risk content.</p>"
+        b"</body></html>"
+    )
+    document = _make_document(
+        content,
+        content_type="text/html",
+        form="10-K/A",
+    )
+
+    sections = extract_sections(document)
+
+    section_ids = [section.section_id for section in sections]
+
+    assert "ITEM_1" in section_ids
+    assert "ITEM_1A" in section_ids

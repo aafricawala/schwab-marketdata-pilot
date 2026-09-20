@@ -1,28 +1,29 @@
 """
 Deterministic SEC filing section extraction.
 
-SEC-5 first increment:
+SEC-5 responsibilities:
     - Defines the immutable SECFilingSection evidence contract.
     - Defines filing-type-aware deterministic section taxonomies.
-    - Supports plain-text filing extraction.
+    - Supports plain-text SEC filing extraction.
+    - Supports deterministic HTML / inline-XBRL section extraction.
     - Preserves exact raw-byte section boundaries.
+    - Uses the original filing bytes as the authoritative evidence source.
     - Does not perform financial interpretation or LLM-based extraction.
 
-SEC-5.2 incremental work:
-    - Adds a deterministic raw HTML source-position scanner.
-    - Preserves exact byte offsets in the original filing document.
-    - Recognizes nested HTML / inline-XBRL elements.
-    - Handles quoted attributes containing '>'.
-    - Preserves HTML entities without decoding them.
-    - Recognizes comments, declarations, and processing instructions.
-    - Does not yet integrate HTML scanning into extract_sections().
+Important source-position contract:
 
-HTML / inline-XBRL structural extraction remains deferred until the raw
-source-position scanner can be integrated with lxml structural interpretation.
+    section.content == document.content[
+        section.start_offset : section.end_offset
+    ]
+
+HTML parsers are used only for structural interpretation when needed.
+Parser-normalized text, decoded entities, or parser-generated offsets are
+never treated as authoritative evidence locations.
 """
 
 from __future__ import annotations
 
+import html
 import re
 from dataclasses import dataclass
 from typing import Final, Optional
@@ -42,46 +43,21 @@ class SECFilingSectionError(SECFilingExtractionError):
     """Raised when a filing section contract or boundary is invalid."""
 
 
-# SEC filing forms supported by SEC-5.
 _SUPPORTED_FORMS: Final[frozenset[str]] = frozenset({"10-K", "10-Q", "8-K"})
 
 
 # ---------------------------------------------------------------------------
 # Raw HTML source-position scanning
 # ---------------------------------------------------------------------------
-#
-# The HTML parser is intentionally NOT used to establish authoritative byte
-# offsets. HTML parsers may decode entities, repair malformed markup, merge
-# nodes, or otherwise normalize the source.
-#
-# This scanner operates directly on the original raw bytes and therefore
-# preserves the exact source-position contract required by SECFilingSection:
-#
-#     section.content == document.content[start_offset:end_offset]
-#
-# The scanner is deliberately structural rather than semantic. It identifies
-# raw HTML tag boundaries and provides enough information for the higher-level
-# extractor to correlate lxml's structural interpretation with the original
-# source document.
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class _RawHTMLToken:
-    """Immutable representation of one raw HTML lexical token.
+    """
+    Immutable representation of one raw HTML lexical token.
 
-    Offsets are byte offsets into the original SECFilingDocument.content.
+    Offsets are byte offsets into the original filing bytes.
     The end offset is exclusive.
-
-    token_type values currently include:
-        - "start_tag"
-        - "end_tag"
-        - "comment"
-        - "declaration"
-        - "processing_instruction"
-        - "text"
-
-    The scanner intentionally does not decode the token content.
     """
 
     token_type: str
@@ -90,9 +66,6 @@ class _RawHTMLToken:
     tag_name: Optional[bytes] = None
 
 
-# HTML tag names are ASCII by definition. Restricting the scanner to this
-# conservative grammar prevents arbitrary text containing "<" from being
-# incorrectly interpreted as a tag.
 _HTML_TAG_NAME_CHARS = frozenset(
     b"abcdefghijklmnopqrstuvwxyz"
     b"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -100,42 +73,84 @@ _HTML_TAG_NAME_CHARS = frozenset(
     b":_-"
 )
 
+_HTML_VOID_ELEMENTS: Final[frozenset[bytes]] = frozenset(
+    {
+        b"area",
+        b"base",
+        b"br",
+        b"col",
+        b"embed",
+        b"hr",
+        b"img",
+        b"input",
+        b"link",
+        b"meta",
+        b"param",
+        b"source",
+        b"track",
+        b"wbr",
+    }
+)
+
+_HTML_BLOCK_ELEMENTS: Final[frozenset[bytes]] = frozenset(
+    {
+        b"address",
+        b"article",
+        b"aside",
+        b"blockquote",
+        b"body",
+        b"caption",
+        b"dd",
+        b"div",
+        b"dl",
+        b"dt",
+        b"fieldset",
+        b"figcaption",
+        b"figure",
+        b"footer",
+        b"form",
+        b"h1",
+        b"h2",
+        b"h3",
+        b"h4",
+        b"h5",
+        b"h6",
+        b"header",
+        b"li",
+        b"main",
+        b"nav",
+        b"ol",
+        b"p",
+        b"pre",
+        b"section",
+        b"table",
+        b"tbody",
+        b"td",
+        b"tfoot",
+        b"th",
+        b"thead",
+        b"tr",
+        b"ul",
+    }
+)
+
 
 def _is_html_tag_name_start(value: int) -> bool:
     """Return whether a byte can begin an HTML tag name."""
-
-    return (
-        65 <= value <= 90
-        or 97 <= value <= 122
-    )
+    return 65 <= value <= 90 or 97 <= value <= 122
 
 
 def _is_html_tag_name_byte(value: int) -> bool:
     """Return whether a byte can occur inside an HTML tag name."""
-
     return value in _HTML_TAG_NAME_CHARS
 
 
 def _find_tag_end(content: bytes, start_offset: int) -> int:
-    """Find the end of an HTML tag while respecting quoted attributes.
-
-    Args:
-        content: Original raw HTML bytes.
-        start_offset: Offset of the '<' beginning the tag.
-
-    Returns:
-        Exclusive end offset immediately after the closing '>'.
-
-    Raises:
-        SECFilingFormatError:
-            If the tag is unterminated.
-
-    Security:
-        Attribute values are scanned while respecting single and double
-        quotes so a '>' contained inside an attribute cannot prematurely
-        terminate the tag.
     """
+    Find the exclusive end of an HTML tag while respecting quoted attributes.
 
+    A '>' inside a quoted attribute does not terminate the tag.
+    """
     quote: Optional[int] = None
     index = start_offset + 1
     length = len(content)
@@ -146,9 +161,9 @@ def _find_tag_end(content: bytes, start_offset: int) -> int:
         if quote is not None:
             if current == quote:
                 quote = None
-        elif current == 34 or current == 39:  # '"' or "'"
+        elif current in (34, 39):
             quote = current
-        elif current == 62:  # '>'
+        elif current == 62:
             return index + 1
 
         index += 1
@@ -159,8 +174,7 @@ def _find_tag_end(content: bytes, start_offset: int) -> int:
 
 
 def _find_comment_end(content: bytes, start_offset: int) -> int:
-    """Find the exclusive end offset of an HTML comment."""
-
+    """Find the exclusive end of an HTML comment."""
     end_marker = content.find(b"-->", start_offset + 4)
 
     if end_marker < 0:
@@ -176,8 +190,7 @@ def _find_processing_instruction_end(
     content: bytes,
     start_offset: int,
 ) -> int:
-    """Find the exclusive end offset of a processing instruction."""
-
+    """Find the exclusive end of an XML processing instruction."""
     end_marker = content.find(b"?>", start_offset + 2)
 
     if end_marker < 0:
@@ -194,23 +207,12 @@ def _extract_raw_tag_name(
     start_offset: int,
     end_offset: int,
 ) -> Optional[bytes]:
-    """Extract a normalized raw HTML tag name from a tag token.
-
-    The returned value is ASCII bytes converted to lowercase. The source
-    offsets themselves remain untouched.
-
-    Returns:
-        Lowercase tag name, or None when the token is not a normal HTML tag.
-    """
-
+    """Extract a lowercase ASCII tag name from a raw tag token."""
     index = start_offset + 1
 
-    # Skip an optional '/' for an end tag.
     if index < end_offset and content[index] == 47:
         index += 1
 
-    # Skip whitespace defensively. Normal HTML syntax does not require this
-    # after '<', but malformed SEC filings occasionally contain it.
     while index < end_offset and content[index] in b" \t\r\n\f":
         index += 1
 
@@ -230,26 +232,12 @@ def _extract_raw_tag_name(
 
 
 def _scan_raw_html(content: bytes) -> tuple[_RawHTMLToken, ...]:
-    """Scan original HTML bytes into deterministic structural tokens.
-
-    This function does not parse HTML semantics and does not modify content.
-    Every returned offset refers directly to the original byte sequence.
-
-    Text between structural tokens is represented explicitly so callers can
-    establish exact source ranges without reconstructing content from parser
-    output.
-
-    Args:
-        content: Raw filing document bytes.
-
-    Returns:
-        Immutable ordered tuple of raw HTML tokens.
-
-    Raises:
-        SECFilingFormatError:
-            If a structural token cannot be terminated safely.
     """
+    Scan original HTML bytes into deterministic lexical tokens.
 
+    The scanner never decodes or rewrites the source. Every offset therefore
+    refers directly to the original raw byte sequence.
+    """
     if not isinstance(content, bytes):
         raise SECFilingFormatError(
             "Raw HTML scanner requires document content as bytes."
@@ -264,12 +252,10 @@ def _scan_raw_html(content: bytes) -> tuple[_RawHTMLToken, ...]:
     index = 0
 
     while index < length:
-        # Fast path: most bytes are ordinary text.
-        if content[index] != 60:  # '<'
+        if content[index] != 60:
             index += 1
             continue
 
-        # Preserve ordinary text preceding this structural token.
         if text_start < index:
             tokens.append(
                 _RawHTMLToken(
@@ -279,7 +265,6 @@ def _scan_raw_html(content: bytes) -> tuple[_RawHTMLToken, ...]:
                 )
             )
 
-        # HTML comment.
         if content.startswith(b"<!--", index):
             end_offset = _find_comment_end(content, index)
             tokens.append(
@@ -293,7 +278,6 @@ def _scan_raw_html(content: bytes) -> tuple[_RawHTMLToken, ...]:
             text_start = index
             continue
 
-        # XML/HTML declaration such as <!DOCTYPE html>.
         if content.startswith(b"<!", index):
             end_offset = _find_tag_end(content, index)
             tokens.append(
@@ -307,7 +291,6 @@ def _scan_raw_html(content: bytes) -> tuple[_RawHTMLToken, ...]:
             text_start = index
             continue
 
-        # Processing instruction, including XML declarations.
         if content.startswith(b"<?", index):
             end_offset = _find_processing_instruction_end(content, index)
             tokens.append(
@@ -321,9 +304,6 @@ def _scan_raw_html(content: bytes) -> tuple[_RawHTMLToken, ...]:
             text_start = index
             continue
 
-        # A '<' that is not followed by a plausible tag name or end-tag
-        # marker is treated as ordinary text. This is important for malformed
-        # filing content containing comparison operators such as "x < y".
         candidate_index = index + 1
 
         if candidate_index < length and content[candidate_index] == 47:
@@ -344,8 +324,6 @@ def _scan_raw_html(content: bytes) -> tuple[_RawHTMLToken, ...]:
             end_offset,
         )
 
-        # Defensive guard: a syntactically valid candidate should always
-        # produce a tag name.
         if tag_name is None:
             index += 1
             continue
@@ -364,7 +342,6 @@ def _scan_raw_html(content: bytes) -> tuple[_RawHTMLToken, ...]:
         index = end_offset
         text_start = index
 
-    # Preserve trailing raw text.
     if text_start < length:
         tokens.append(
             _RawHTMLToken(
@@ -378,18 +355,289 @@ def _scan_raw_html(content: bytes) -> tuple[_RawHTMLToken, ...]:
 
 
 # ---------------------------------------------------------------------------
+# Raw HTML structural interpretation
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _RawHTMLElement:
+    """
+    Internal representation of an HTML element reconstructed from raw tokens.
+
+    Offsets always refer to the original document bytes.
+    """
+
+    tag_name: bytes
+    start_offset: int
+    end_offset: int
+    child_indexes: tuple[int, ...]
+
+
+def _is_self_closing_start_tag(
+    content: bytes,
+    token: _RawHTMLToken,
+) -> bool:
+    """Return whether a raw start tag ends with '/>'."""
+    if token.token_type != "start_tag":
+        return False
+
+    tag_content = content[token.start_offset:token.end_offset].rstrip()
+
+    return tag_content.endswith(b"/>") or token.tag_name in _HTML_VOID_ELEMENTS
+
+
+def _build_raw_html_elements(
+    content: bytes,
+    tokens: tuple[_RawHTMLToken, ...],
+) -> tuple[_RawHTMLElement, ...]:
+    """
+    Reconstruct a tolerant element tree from raw HTML tokens.
+
+    This is intentionally not a standards-complete HTML parser. Its purpose
+    is limited to recovering source ranges and parent/child relationships
+    needed for deterministic heading recognition.
+
+    Malformed end tags are tolerated where possible because SEC filings may
+    contain imperfect issuer-generated HTML.
+    """
+    elements: list[_RawHTMLElement] = []
+    mutable_children: list[list[int]] = []
+    stack: list[int] = []
+
+    for token in tokens:
+        if token.token_type == "start_tag":
+            if token.tag_name is None:
+                continue
+
+            element_index = len(elements)
+
+            elements.append(
+                _RawHTMLElement(
+                    tag_name=token.tag_name,
+                    start_offset=token.start_offset,
+                    end_offset=token.end_offset,
+                    child_indexes=(),
+                )
+            )
+            mutable_children.append([])
+
+            if stack:
+                mutable_children[stack[-1]].append(element_index)
+
+            if not _is_self_closing_start_tag(content, token):
+                stack.append(element_index)
+
+        elif token.token_type == "end_tag":
+            if token.tag_name is None:
+                continue
+
+            # Locate the nearest matching open element. Elements above it
+            # are implicitly closed at this point. This is deliberately
+            # tolerant of malformed issuer HTML.
+            matching_position: Optional[int] = None
+
+            for position in range(len(stack) - 1, -1, -1):
+                if elements[stack[position]].tag_name == token.tag_name:
+                    matching_position = position
+                    break
+
+            if matching_position is None:
+                continue
+
+            element_index = stack[matching_position]
+
+            elements[element_index] = _RawHTMLElement(
+                tag_name=elements[element_index].tag_name,
+                start_offset=elements[element_index].start_offset,
+                end_offset=token.end_offset,
+                child_indexes=tuple(mutable_children[element_index]),
+            )
+
+            del stack[matching_position:]
+
+    # Any still-open elements extend to the end of the original source.
+    for element_index in stack:
+        elements[element_index] = _RawHTMLElement(
+            tag_name=elements[element_index].tag_name,
+            start_offset=elements[element_index].start_offset,
+            end_offset=len(content),
+            child_indexes=tuple(mutable_children[element_index]),
+        )
+
+    return tuple(elements)
+
+
+def _element_text(
+    content: bytes,
+    tokens: tuple[_RawHTMLToken, ...],
+    element: _RawHTMLElement,
+) -> str:
+    """
+    Recover human-readable text contained by an element.
+
+    Entity decoding occurs only in this temporary structural representation.
+    The original bytes remain untouched and authoritative.
+    """
+    pieces: list[str] = []
+
+    for token in tokens:
+        if token.start_offset < element.start_offset:
+            continue
+
+        if token.end_offset > element.end_offset:
+            break
+
+        if token.token_type != "text":
+            continue
+
+        raw_text = content[token.start_offset:token.end_offset]
+
+        try:
+            decoded = raw_text.decode("utf-8")
+        except UnicodeDecodeError:
+            decoded = raw_text.decode("latin-1")
+
+        pieces.append(decoded)
+
+    return html.unescape(" ".join(pieces))
+
+
+def _is_heading_like_element(tag_name: bytes) -> bool:
+    """
+    Return whether an element is a plausible filing heading container.
+
+    Standard heading tags are preferred. Common block-level SEC-generated
+    containers are also inspected because many filings represent headings
+    with div/p/td/span combinations rather than semantic h1-h6 tags.
+    """
+    return tag_name in _HTML_BLOCK_ELEMENTS or tag_name in {
+        b"title",
+        b"span",
+    }
+
+
+def _extract_heading_candidates_html(
+    content: bytes,
+    base_form: str,
+) -> tuple[_HeadingCandidate, ...]:
+    """
+    Identify SEC Item headings from raw HTML structure.
+
+    Candidate boundaries are taken from the raw element ranges, never from
+    parser-generated character offsets.
+    """
+    tokens = _scan_raw_html(content)
+    elements = _build_raw_html_elements(content, tokens)
+
+    candidates: list[_HeadingCandidate] = []
+
+    for element in elements:
+        if not _is_heading_like_element(element.tag_name):
+            continue
+
+        text = _element_text(content, tokens, element)
+
+        # Collapse HTML whitespace before structural matching.
+        text = re.sub(r"\s+", " ", text).strip()
+
+        if not text or len(text) > 500:
+            continue
+
+        match = _ITEM_HEADING_PATTERN.match(text)
+
+        if not match:
+            continue
+
+        number = match.group("number")
+        letter = match.group("letter") or ""
+        item_number = f"{number}{letter}".upper()
+        title = match.group("title").strip()
+
+        if not title:
+            continue
+
+        # Avoid recognizing a generic parent container when a more specific
+        # nested heading element contains the same Item heading. Standard
+        # heading elements are preferred; generic containers remain useful
+        # when the issuer has no semantic heading element.
+        if element.tag_name not in {
+            b"h1",
+            b"h2",
+            b"h3",
+            b"h4",
+            b"h5",
+            b"h6",
+        }:
+            nested_heading_exists = False
+
+            for child_index in element.child_indexes:
+                child = elements[child_index]
+
+                if child.tag_name not in {
+                    b"h1",
+                    b"h2",
+                    b"h3",
+                    b"h4",
+                    b"h5",
+                    b"h6",
+                }:
+                    continue
+
+                child_text = re.sub(
+                    r"\s+",
+                    " ",
+                    _element_text(content, tokens, child),
+                ).strip()
+
+                if _ITEM_HEADING_PATTERN.match(child_text):
+                    nested_heading_exists = True
+                    break
+
+            if nested_heading_exists:
+                continue
+
+        candidates.append(
+            _HeadingCandidate(
+                item_number=item_number,
+                title=title,
+                start_offset=element.start_offset,
+                end_offset=element.end_offset,
+            )
+        )
+
+    # Multiple structural containers can describe the same raw heading.
+    # Deduplicate exact source/title/item matches deterministically.
+    deduplicated: list[_HeadingCandidate] = []
+    seen: set[tuple[int, str, str]] = set()
+
+    for candidate in sorted(
+        candidates,
+        key=lambda item: (
+            item.start_offset,
+            item.end_offset,
+            item.item_number,
+            item.title.casefold(),
+        ),
+    ):
+        identity = (
+            candidate.start_offset,
+            candidate.item_number,
+            _normalize_title(candidate.title),
+        )
+
+        if identity in seen:
+            continue
+
+        seen.add(identity)
+        deduplicated.append(candidate)
+
+    return tuple(deduplicated)
+
+
+# ---------------------------------------------------------------------------
 # Filing section taxonomy
 # ---------------------------------------------------------------------------
-#
-# The taxonomy contains section identifiers that SEC-5 recognizes
-# deterministically. The extractor does not require every section to exist.
-# Missing sections are normal because filings vary by issuer, amendment,
-# reporting period, and SEC filing structure.
-#
-# section_id is the stable machine-readable identity.
-# title is the expected canonical title.
-# level is the structural level used by the section contract.
-#
+
 
 _SECTION_TAXONOMY: Final[dict[str, tuple[tuple[str, str, int], ...]]] = {
     "10-K": (
@@ -437,40 +685,20 @@ _SECTION_TAXONOMY: Final[dict[str, tuple[tuple[str, str, int], ...]]] = {
     ),
     "8-K": (
         ("ITEM_1_01", "Entry into a Material Definitive Agreement", 1),
-        (
-            "ITEM_1_02",
-            "Termination of a Material Definitive Agreement",
-            1,
-        ),
+        ("ITEM_1_02", "Termination of a Material Definitive Agreement", 1),
         ("ITEM_1_03", "Bankruptcy or Receivership", 1),
         ("ITEM_1_04", "Mine Safety Reporting", 1),
         ("ITEM_1_05", "Material Cybersecurity Incidents", 1),
-        (
-            "ITEM_2_01",
-            "Completion of Acquisition or Disposition of Assets",
-            1,
-        ),
-        (
-            "ITEM_2_02",
-            "Results of Operations and Financial Condition",
-            1,
-        ),
-        (
-            "ITEM_2_03",
-            "Creation of a Direct Financial Obligation",
-            1,
-        ),
+        ("ITEM_2_01", "Completion of Acquisition or Disposition of Assets", 1),
+        ("ITEM_2_02", "Results of Operations and Financial Condition", 1),
+        ("ITEM_2_03", "Creation of a Direct Financial Obligation", 1),
         (
             "ITEM_2_04",
             "Triggering Events That Accelerate or Increase "
             "a Direct Financial Obligation",
             1,
         ),
-        (
-            "ITEM_2_05",
-            "Costs Associated With Exit or Disposal Activities",
-            1,
-        ),
+        ("ITEM_2_05", "Costs Associated With Exit or Disposal Activities", 1),
         ("ITEM_2_06", "Material Impairments", 1),
         (
             "ITEM_3_01",
@@ -495,42 +723,18 @@ _SECTION_TAXONOMY: Final[dict[str, tuple[tuple[str, str, int], ...]]] = {
             1,
         ),
         ("ITEM_5_01", "Changes in Control of Registrant", 1),
-        (
-            "ITEM_5_02",
-            "Departure of Directors or Certain Officers",
-            1,
-        ),
-        (
-            "ITEM_5_03",
-            "Amendments to Articles of Incorporation or Bylaws",
-            1,
-        ),
+        ("ITEM_5_02", "Departure of Directors or Certain Officers", 1),
+        ("ITEM_5_03", "Amendments to Articles of Incorporation or Bylaws", 1),
         ("ITEM_5_04", "Temporary Suspension of Trading", 1),
-        (
-            "ITEM_5_05",
-            "Amendment to Registrant's Code of Ethics",
-            1,
-        ),
+        ("ITEM_5_05", "Amendment to Registrant's Code of Ethics", 1),
         ("ITEM_5_06", "Change in Shell Company Status", 1),
         ("ITEM_5_07", "Submission of Matters to a Vote", 1),
         ("ITEM_5_08", "Shareholder Director Nominations", 1),
-        (
-            "ITEM_6_01",
-            "ABS Informational and Computational Material",
-            1,
-        ),
+        ("ITEM_6_01", "ABS Informational and Computational Material", 1),
         ("ITEM_6_02", "Change of Servicer or Trustee", 1),
         ("ITEM_6_03", "Change in Credit Enhancement", 1),
-        (
-            "ITEM_6_04",
-            "Failure to Make a Required Distribution",
-            1,
-        ),
-        (
-            "ITEM_6_05",
-            "Securities Act Updating Disclosure",
-            1,
-        ),
+        ("ITEM_6_04", "Failure to Make a Required Distribution", 1),
+        ("ITEM_6_05", "Securities Act Updating Disclosure", 1),
         ("ITEM_7_01", "Regulation FD Disclosure", 1),
         ("ITEM_8_01", "Other Events", 1),
         ("ITEM_9_01", "Financial Statements and Exhibits", 1),
@@ -539,22 +743,9 @@ _SECTION_TAXONOMY: Final[dict[str, tuple[tuple[str, str, int], ...]]] = {
 
 
 # ---------------------------------------------------------------------------
-# Plain-text heading recognition
+# Heading recognition
 # ---------------------------------------------------------------------------
-#
-# The pattern is deliberately line-oriented. It is not intended to parse
-# arbitrary prose occurrences such as "Item 1 discusses..." inside a paragraph.
-#
-# Examples recognized:
-#     ITEM 1. BUSINESS
-#     Item 1A. Risk Factors
-#     ITEM 7 - Management's Discussion and Analysis
-#     PART I
-#     ITEM 1. Financial Statements
-#
-# The pattern captures only the structural heading line. Canonical section
-# identity is resolved separately from the filing-specific taxonomy.
-#
+
 
 _ITEM_HEADING_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^[ \t]*ITEM[ \t]+"
@@ -584,12 +775,7 @@ class SECFilingSection:
 
         [start_offset, end_offset)
 
-    and refer directly to the original raw bytes contained in the
-    SECFilingDocument.
-
-    Therefore the fundamental evidence invariant is:
-
-        content == document.content[start_offset:end_offset]
+    and refer directly to the original raw bytes.
     """
 
     filing: SECFiling
@@ -653,15 +839,13 @@ class SECFilingSection:
         if not isinstance(self.content, bytes):
             raise SECFilingSectionError("content must be bytes.")
 
-        document_length = len(self.document.content)
-
-        if self.end_offset > document_length:
+        if self.end_offset > len(self.document.content):
             raise SECFilingSectionError(
                 "Section end_offset exceeds the document content length."
             )
 
         expected_content = self.document.content[
-            self.start_offset : self.end_offset
+            self.start_offset:self.end_offset
         ]
 
         if self.content != expected_content:
@@ -672,7 +856,7 @@ class SECFilingSection:
 
 @dataclass(frozen=True)
 class _HeadingCandidate:
-    """Internal immutable representation of a recognized text heading."""
+    """Internal immutable representation of a recognized filing heading."""
 
     item_number: str
     title: str
@@ -690,14 +874,7 @@ class _TaxonomyEntry:
 
 
 def _get_base_form(form: str) -> str:
-    """
-    Return the base SEC form for an original filing or amendment.
-
-    Examples:
-        10-K  -> 10-K
-        10-K/A -> 10-K
-        8-K/A  -> 8-K
-    """
+    """Return the base SEC form, removing an amendment suffix."""
     if not isinstance(form, str) or not form.strip():
         raise SECFilingFormatError("Filing form must be a non-empty string.")
 
@@ -710,9 +887,7 @@ def _get_base_form(form: str) -> str:
 
 
 def _validate_document(document: SECFilingDocument) -> str:
-    """
-    Validate the input document and return its supported base filing form.
-    """
+    """Validate the filing document and return its supported base form."""
     if not isinstance(document, SECFilingDocument):
         raise SECFilingFormatError(
             "document must be a SECFilingDocument instance."
@@ -735,17 +910,7 @@ def _validate_document(document: SECFilingDocument) -> str:
 
 
 def _decode_plain_text(content: bytes) -> str:
-    """
-    Decode raw filing bytes for structural parsing.
-
-    The decoded string is parsing-only. Section offsets are subsequently
-    calculated against the original bytes, so decoded text never becomes the
-    authoritative evidence representation.
-
-    UTF-8 is attempted first. Latin-1 is used as a deterministic fallback
-    because it provides a one-byte-to-one-code-point mapping for arbitrary
-    byte values and therefore preserves positional correspondence.
-    """
+    """Decode filing bytes for parsing while preserving raw bytes separately."""
     try:
         return content.decode("utf-8")
     except UnicodeDecodeError:
@@ -753,12 +918,7 @@ def _decode_plain_text(content: bytes) -> str:
 
 
 def _line_start_offsets(content: bytes) -> tuple[int, ...]:
-    """
-    Return the raw-byte offset of every decoded text line.
-
-    This implementation intentionally treats LF as the primary line
-    delimiter and preserves CRLF bytes as part of the preceding line.
-    """
+    """Return raw-byte offsets for the beginning of every text line."""
     offsets = [0]
 
     for match in re.finditer(b"\n", content):
@@ -768,7 +928,7 @@ def _line_start_offsets(content: bytes) -> tuple[int, ...]:
 
 
 def _normalize_title(title: str) -> str:
-    """Normalize a heading title for deterministic taxonomy matching."""
+    """Normalize heading text for deterministic taxonomy matching."""
     normalized = re.sub(r"\s+", " ", title.strip())
     normalized = normalized.strip(" .:-–—\t")
     return normalized.casefold()
@@ -778,13 +938,9 @@ def _extract_heading_candidates(
     content: bytes,
     base_form: str,
 ) -> tuple[_HeadingCandidate, ...]:
-    """
-    Identify structurally plausible Item headings in plain-text content.
+    """Identify structurally plausible Item headings in plain-text content."""
+    del base_form  # Reserved for future filing-specific plain-text rules.
 
-    The returned offsets refer directly to the original raw bytes because
-    ASCII SEC Item/Part heading syntax is byte-compatible with the decoding
-    performed by _decode_plain_text().
-    """
     text = _decode_plain_text(content)
     line_offsets = _line_start_offsets(content)
 
@@ -795,23 +951,27 @@ def _extract_heading_candidates(
 
     for line in lines:
         line_without_ending = line.rstrip("\r\n")
-
         item_match = _ITEM_HEADING_PATTERN.match(line_without_ending)
 
         if item_match:
             number = item_match.group("number")
             letter = item_match.group("letter") or ""
             item_number = f"{number}{letter}".upper()
-
             title = item_match.group("title").strip()
 
             start_offset = line_offsets[offset_index]
-            end_offset = start_offset + len(line.encode("utf-8"))
 
-            # For Latin-1 fallback, the heading itself is expected to be ASCII.
-            # Recalculate from the original bytes if UTF-8 byte length differs.
-            if len(line.encode("utf-8")) > len(content) - start_offset:
-                end_offset = len(content)
+            # SEC Item headings are ASCII in normal filings. Use the original
+            # line bytes for the authoritative boundary rather than assuming
+            # decoded-character width equals byte width.
+            raw_line = content[
+                start_offset:
+                content.find(b"\n", start_offset) + 1
+                if content.find(b"\n", start_offset) >= 0
+                else len(content)
+            ]
+
+            end_offset = start_offset + len(raw_line)
 
             candidates.append(
                 _HeadingCandidate(
@@ -828,19 +988,15 @@ def _extract_heading_candidates(
 
 
 def _build_taxonomy(base_form: str) -> dict[str, _TaxonomyEntry]:
-    """
-    Build a deterministic lookup table for one filing form.
-    """
-    entries: dict[str, _TaxonomyEntry] = {}
-
-    for section_id, title, level in _SECTION_TAXONOMY[base_form]:
-        entries[section_id] = _TaxonomyEntry(
+    """Build the filing-specific deterministic taxonomy lookup."""
+    return {
+        section_id: _TaxonomyEntry(
             section_id=section_id,
             title=title,
             level=level,
         )
-
-    return entries
+        for section_id, title, level in _SECTION_TAXONOMY[base_form]
+    }
 
 
 def _taxonomy_key(
@@ -848,12 +1004,7 @@ def _taxonomy_key(
     item_number: str,
     title: str,
 ) -> str | None:
-    """
-    Resolve one recognized Item heading to the filing taxonomy.
-
-    Title matching is used to distinguish repeated item numbers where
-    necessary, such as 10-Q Part I Item 1 versus Part II Item 1.
-    """
+    """Resolve an Item heading to the deterministic filing taxonomy."""
     normalized_title = _normalize_title(title)
 
     if base_form == "10-K":
@@ -862,9 +1013,6 @@ def _taxonomy_key(
     if base_form == "8-K":
         return f"ITEM_{item_number.replace('.', '_')}"
 
-    # 10-Q requires Part context. Plain-text parsing in this first increment
-    # does not infer Part from arbitrary prose; therefore Item 1 is mapped
-    # according to its recognized title when it is unambiguous.
     if base_form == "10-Q":
         title_to_part_i = {
             _normalize_title("Financial Statements"): "PART_I_ITEM_1",
@@ -895,10 +1043,7 @@ def _taxonomy_key(
         if item_number == "1" and normalized_title in title_to_part_ii:
             return title_to_part_ii[normalized_title]
 
-        if (
-            item_number in {"2", "3", "4"}
-            and normalized_title in title_to_part_i
-        ):
+        if item_number in {"2", "3", "4"} and normalized_title in title_to_part_i:
             return f"PART_I_ITEM_{item_number}"
 
         if item_number in {"1A", "2", "3", "4", "5", "6"}:
@@ -910,19 +1055,15 @@ def _taxonomy_key(
     return None
 
 
-def _extract_sections_plain_text(
+def _extract_sections_from_candidates(
     document: SECFilingDocument,
     base_form: str,
+    candidates: tuple[_HeadingCandidate, ...],
 ) -> tuple[SECFilingSection, ...]:
     """
-    Extract recognized sections from a plain-text filing.
-
-    A recognized section begins at the beginning of its heading line and ends
-    immediately before the next recognized Item heading. This preserves the
-    complete heading as part of the evidence slice.
+    Convert recognized heading candidates into immutable evidence sections.
     """
     taxonomy = _build_taxonomy(base_form)
-    candidates = _extract_heading_candidates(document.content, base_form)
 
     recognized: list[tuple[_HeadingCandidate, _TaxonomyEntry]] = []
 
@@ -943,6 +1084,16 @@ def _extract_sections_plain_text(
 
         recognized.append((candidate, entry))
 
+    # Preserve source order and eliminate overlapping duplicate structural
+    # candidates that can arise from malformed/nested HTML.
+    recognized.sort(
+        key=lambda pair: (
+            pair[0].start_offset,
+            pair[0].end_offset,
+            pair[0].item_number,
+        )
+    )
+
     sections: list[SECFilingSection] = []
     occurrences: dict[str, int] = {}
 
@@ -956,10 +1107,13 @@ def _extract_sections_plain_text(
         start_offset = candidate.start_offset
         end_offset = next_start
 
+        if end_offset < start_offset:
+            raise SECFilingSectionError(
+                "Section boundaries are not monotonically ordered."
+            )
+
         section_id = entry.section_id
         occurrences[section_id] = occurrences.get(section_id, 0) + 1
-
-        content = document.content[start_offset:end_offset]
 
         sections.append(
             SECFilingSection(
@@ -971,43 +1125,80 @@ def _extract_sections_plain_text(
                 occurrence=occurrences[section_id],
                 start_offset=start_offset,
                 end_offset=end_offset,
-                content=content,
+                content=document.content[start_offset:end_offset],
             )
         )
 
     return tuple(sections)
 
 
+def _extract_sections_plain_text(
+    document: SECFilingDocument,
+    base_form: str,
+) -> tuple[SECFilingSection, ...]:
+    """Extract recognized sections from a plain-text filing."""
+    candidates = _extract_heading_candidates(
+        document.content,
+        base_form,
+    )
+
+    return _extract_sections_from_candidates(
+        document,
+        base_form,
+        candidates,
+    )
+
+
+def _extract_sections_html(
+    document: SECFilingDocument,
+    base_form: str,
+) -> tuple[SECFilingSection, ...]:
+    """
+    Extract recognized sections from HTML / inline-XBRL content.
+
+    The raw scanner establishes source boundaries. HTML structure is used only
+    to identify likely heading containers and reconstruct their text.
+    """
+    candidates = _extract_heading_candidates_html(
+        document.content,
+        base_form,
+    )
+
+    return _extract_sections_from_candidates(
+        document,
+        base_form,
+        candidates,
+    )
+
+
 def extract_sections(
     document: SECFilingDocument,
 ) -> tuple[SECFilingSection, ...]:
     """
-    Deterministically extract supported filing sections.
+    Deterministically extract supported SEC filing sections.
 
-    SEC-5 first increment supports plain-text documents only.
+    Plain-text and HTML/XML SEC filing representations are supported.
 
-    The raw HTML scanner introduced in SEC-5.2 is intentionally not invoked
-    here yet. Integration will occur only after lxml structural interpretation
-    has been explicitly mapped to authoritative raw-byte boundaries.
+    For HTML/XML:
+        - raw bytes remain authoritative;
+        - structural interpretation is performed from raw tokens;
+        - entity decoding is parsing-only;
+        - section offsets always reference original raw bytes.
+
+    Missing recognized sections are normal and return no section for that
+    taxonomy entry.
 
     Returns:
-        Tuple of immutable SECFilingSection objects ordered by raw-byte
-        start_offset.
+        Immutable SECFilingSection objects ordered by source offset.
 
     Raises:
         SECFilingFormatError:
-            If the document is invalid, empty, or uses an unsupported form.
+            If the document is invalid, empty, unsupported, or malformed.
     """
     base_form = _validate_document(document)
-
     content_type = document.content_type.strip().lower()
 
-    # The complete-submission SEC text endpoint commonly returns text/plain.
-    # The first SEC-5 increment intentionally refuses HTML/inline-XBRL rather
-    # than pretending that HTML parser offsets are raw-byte offsets.
     if "html" in content_type or "xml" in content_type:
-        raise SECFilingFormatError(
-            "HTML/XML extraction is not implemented in SEC-5 increment 1."
-        )
+        return _extract_sections_html(document, base_form)
 
     return _extract_sections_plain_text(document, base_form)
