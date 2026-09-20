@@ -431,9 +431,6 @@ def _build_raw_html_elements(
             if token.tag_name is None:
                 continue
 
-            # Locate the nearest matching open element. Elements above it
-            # are implicitly closed at this point. This is deliberately
-            # tolerant of malformed issuer HTML.
             matching_position: Optional[int] = None
 
             for position in range(len(stack) - 1, -1, -1):
@@ -455,7 +452,6 @@ def _build_raw_html_elements(
 
             del stack[matching_position:]
 
-    # Any still-open elements extend to the end of the original source.
     for element_index in stack:
         elements[element_index] = _RawHTMLElement(
             tag_name=elements[element_index].tag_name,
@@ -526,6 +522,8 @@ def _extract_heading_candidates_html(
     Candidate boundaries are taken from the raw element ranges, never from
     parser-generated character offsets.
     """
+    del base_form  # Reserved for future filing-specific HTML rules.
+
     tokens = _scan_raw_html(content)
     elements = _build_raw_html_elements(content, tokens)
 
@@ -537,7 +535,8 @@ def _extract_heading_candidates_html(
 
         text = _element_text(content, tokens, element)
 
-        # Collapse HTML whitespace before structural matching.
+        # Collapse HTML whitespace, including Unicode whitespace such as
+        # U+2009 THIN SPACE used by some real SEC filings.
         text = re.sub(r"\s+", " ", text).strip()
 
         if not text or len(text) > 500:
@@ -556,10 +555,6 @@ def _extract_heading_candidates_html(
         if not title:
             continue
 
-        # Avoid recognizing a generic parent container when a more specific
-        # nested heading element contains the same Item heading. Standard
-        # heading elements are preferred; generic containers remain useful
-        # when the issuer has no semantic heading element.
         if element.tag_name not in {
             b"h1",
             b"h2",
@@ -605,8 +600,6 @@ def _extract_heading_candidates_html(
             )
         )
 
-    # Multiple structural containers can describe the same raw heading.
-    # Deduplicate exact source/title/item matches deterministically.
     deduplicated: list[_HeadingCandidate] = []
     seen: set[tuple[int, str, str]] = set()
 
@@ -747,9 +740,12 @@ _SECTION_TAXONOMY: Final[dict[str, tuple[tuple[str, str, int], ...]]] = {
 # ---------------------------------------------------------------------------
 
 
+# SEC 8-K item numbers contain a decimal component, e.g. 7.01 and 9.01.
+# The decimal component must therefore be captured as part of the item
+# number rather than interpreted as punctuation preceding the title.
 _ITEM_HEADING_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^[ \t]*ITEM[ \t]+"
-    r"(?P<number>\d+)"
+    r"(?P<number>\d+(?:\.\d+)?)"
     r"(?P<letter>[A-Z])?"
     r"(?:[ \t]*[.:)\-–—]?[ \t]*)"
     r"(?P<title>.*?)"
@@ -961,9 +957,6 @@ def _extract_heading_candidates(
 
             start_offset = line_offsets[offset_index]
 
-            # SEC Item headings are ASCII in normal filings. Use the original
-            # line bytes for the authoritative boundary rather than assuming
-            # decoded-character width equals byte width.
             raw_line = content[
                 start_offset:
                 content.find(b"\n", start_offset) + 1
@@ -1084,8 +1077,6 @@ def _extract_sections_from_candidates(
 
         recognized.append((candidate, entry))
 
-    # Preserve source order and eliminate overlapping duplicate structural
-    # candidates that can arise from malformed/nested HTML.
     recognized.sort(
         key=lambda pair: (
             pair[0].start_offset,
