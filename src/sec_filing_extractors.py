@@ -648,13 +648,15 @@ def _find_complete_heading_container(
     element_index: int,
 ) -> tuple[int, str] | None:
     """
-    Find the nearest ancestor containing the complete Item heading text.
+    Find the nearest heading-like element containing a complete Item heading.
 
     Real SEC inline-XBRL filings may split one visible heading across several
     nested spans.
 
-    Ancestors containing an excessive amount of text are rejected so a
-    heading cannot absorb the following filing body.
+    The nearest matching element is authoritative. Once an element itself
+    contains a complete Item heading, do not promote it to a broader ancestor,
+    because broader ancestors may contain multiple separate Item headings and
+    would incorrectly swallow subsequent sections.
     """
     current_index: Optional[int] = element_index
 
@@ -674,24 +676,6 @@ def _find_complete_heading_container(
             continue
 
         if _matches_item_heading(text):
-            parent_index = parents[current_index]
-
-            if parent_index is not None:
-                parent = elements[parent_index]
-
-                if _is_heading_like_element(parent.tag_name):
-                    parent_text = _normalize_html_heading_text(
-                        _element_text(content, tokens, parent)
-                    )
-
-                    if (
-                        len(parent_text) <= 500
-                        and _matches_item_heading(parent_text)
-                        and parent_text != text
-                    ):
-                        current_index = parent_index
-                        continue
-
             return current_index, text
 
         current_index = parents[current_index]
@@ -917,15 +901,7 @@ def _extract_heading_candidates_html(
 
         if not title:
             continue
-        
-        if element.tag_name not in semantic_heading_tags:
-            if _has_descendant_complete_item_heading(
-                elements,
-                tokens,
-                content,
-                element,
-            ):
-                continue
+
         candidates.append(
             _HeadingCandidate(
                 item_number=item_number,
@@ -1266,10 +1242,12 @@ def _extract_heading_candidates(
 
             start_offset = line_offsets[offset_index]
 
+            newline_offset = content.find(b"\n", start_offset)
+
             raw_line = content[
                 start_offset:
-                content.find(b"\n", start_offset) + 1
-                if content.find(b"\n", start_offset) >= 0
+                newline_offset + 1
+                if newline_offset >= 0
                 else len(content)
             ]
 
@@ -1307,7 +1285,19 @@ def _taxonomy_key(
     title: str,
 ) -> str | None:
     """Resolve an Item heading to the deterministic filing taxonomy."""
-    normalized_title = _normalize_title(title).replace("’", "'")
+
+    def _heading_key(value: str) -> str:
+        """
+        Normalize a heading to alphanumeric characters only.
+
+        This intentionally avoids dependence on whitespace, punctuation,
+        Unicode apostrophes, or SEC-generated heading fragments.
+        """
+        return re.sub(
+            r"[^a-z0-9]+",
+            "",
+            value.lower(),
+        )
 
     if base_form == "10-K":
         return f"ITEM_{item_number}"
@@ -1316,51 +1306,50 @@ def _taxonomy_key(
         return f"ITEM_{item_number.replace('.', '_')}"
 
     if base_form == "10-Q":
-        title_to_part_i = {
-            _normalize_title("Financial Statements"): "PART_I_ITEM_1",
-            _normalize_title(
-                "Management's Discussion and Analysis"
-            ): "PART_I_ITEM_2",
-            _normalize_title(
-                "Quantitative and Qualitative Disclosures About Market Risk"
-            ): "PART_I_ITEM_3",
-            _normalize_title("Controls and Procedures"): "PART_I_ITEM_4",
+        part_i_titles = {
+            "1": "Financial Statements",
+            "2": "Management's Discussion and Analysis",
+            "3": (
+                "Quantitative and Qualitative "
+                "Disclosures About Market Risk"
+            ),
+            "4": "Controls and Procedures",
         }
 
-        title_to_part_ii = {
-            _normalize_title("Legal Proceedings"): "PART_II_ITEM_1",
-            _normalize_title("Risk Factors"): "PART_II_ITEM_1A",
-            _normalize_title(
-                "Unregistered Sales of Equity Securities"
-            ): "PART_II_ITEM_2",
-            _normalize_title("Defaults Upon Senior Securities"): "PART_II_ITEM_3",
-            _normalize_title("Mine Safety Disclosures"): "PART_II_ITEM_4",
-            _normalize_title("Other Information"): "PART_II_ITEM_5",
-            _normalize_title("Exhibits"): "PART_II_ITEM_6",
+        part_ii_titles = {
+            "1": "Legal Proceedings",
+            "1A": "Risk Factors",
+            "2": "Unregistered Sales of Equity Securities",
+            "3": "Defaults Upon Senior Securities",
+            "4": "Mine Safety Disclosures",
+            "5": "Other Information",
+            "6": "Exhibits",
         }
 
-        if item_number == "1" and normalized_title in title_to_part_i:
-            return title_to_part_i[normalized_title]
+        observed = _heading_key(title)
 
-        if item_number == "1" and normalized_title in title_to_part_ii:
-            return title_to_part_ii[normalized_title]
+        if not observed:
+            return None
 
-        if (
-            item_number == "2"
-            and normalized_title.startswith(
-                _normalize_title("Management's Discussion and Analysis")
-            )
-        ):
-            return "PART_I_ITEM_2"
+        if item_number in part_i_titles:
+            canonical = _heading_key(part_i_titles[item_number])
 
-        if item_number in {"3", "4"} and normalized_title in title_to_part_i:
-            return f"PART_I_ITEM_{item_number}"
+            if (
+                canonical.startswith(observed)
+                or observed.startswith(canonical)
+            ):
+                return f"PART_I_ITEM_{item_number}"
 
-        if item_number in {"1A", "2", "3", "4", "5", "6"}:
-            candidate = f"PART_II_ITEM_{item_number}"
+        if item_number in part_ii_titles:
+            canonical = _heading_key(part_ii_titles[item_number])
 
-            if candidate in _build_taxonomy("10-Q"):
-                return candidate
+            if (
+                canonical.startswith(observed)
+                or observed.startswith(canonical)
+            ):
+                return f"PART_II_ITEM_{item_number}"
+
+        return None
 
     return None
 
@@ -1508,4 +1497,3 @@ def extract_sections(
         return _extract_sections_html(document, base_form)
 
     return _extract_sections_plain_text(document, base_form)
-
