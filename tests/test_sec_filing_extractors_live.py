@@ -16,7 +16,11 @@ These tests are intentionally separate from the offline mock tests.
 from __future__ import annotations
 
 from sec_client import SECClient
-from sec_filing_extractors import extract_sections
+from sec_filing_extractors import (
+    _extract_heading_candidates_html,
+    _taxonomy_key,
+    extract_sections,
+)
 from sec_filings import SECFilingDocument, SECFilingsClient
 from sec_submissions import SECFiling, SubmissionsClient
 
@@ -38,6 +42,69 @@ SUPPORTED_FORMS = {
     "8-K/A",
 }
 
+def test_live_10q_heading_raw_structure_diagnostic() -> None:
+    """Inspect raw HTML surrounding the first real 10-Q heading candidate."""
+    (
+        client,
+        submissions_client,
+        filings_client,
+    ) = _get_live_clients()
+
+    try:
+        filings = _find_current_supported_filings(
+            submissions_client
+        )
+
+        filing = next(
+            filing
+            for filing in filings
+            if filing.form == "10-Q"
+        )
+
+        document = filings_client.get_primary_document(
+            filing
+        )
+
+        candidates = _extract_heading_candidates_html(
+            document.content,
+            "10-Q",
+        )
+
+        assert candidates
+
+        candidate = candidates[0]
+
+        context_start = max(
+            0,
+            candidate.start_offset - 1500,
+        )
+        context_end = min(
+            len(document.content),
+            candidate.end_offset + 1500,
+        )
+
+        raw_context = document.content[
+            context_start:context_end
+        ]
+
+        print("\nSEC-5.3 REAL 10-Q RAW HEADING STRUCTURE")
+        print(
+            f"ITEM={candidate.item_number!r} "
+            f"TITLE={candidate.title!r}"
+        )
+        print(
+            f"CANDIDATE_START={candidate.start_offset} "
+            f"CANDIDATE_END={candidate.end_offset}"
+        )
+        print(
+            raw_context.decode(
+                "utf-8",
+                errors="replace",
+            )
+        )
+
+    finally:
+        client.close()
 
 def _get_live_clients() -> tuple[
     SECClient,
@@ -130,10 +197,8 @@ def _is_inline_xbrl(document: SECFilingDocument) -> bool:
     content_lower = document.content.lower()
 
     return (
-        b"<ix:"
-        in content_lower
-        or b"</ix:"
-        in content_lower
+        b"<ix:" in content_lower
+        or b"</ix:" in content_lower
     )
 
 
@@ -212,13 +277,7 @@ def test_live_supported_form_extraction_when_available() -> None:
 
 
 def test_live_corpus_discovery_diagnostic() -> None:
-    """Report the real SEC corpus available for SEC-5.3 validation.
-
-    This test intentionally does not modify production behavior or require
-    every corpus category to exist in the current recent-filings window.
-    Its purpose is to expose the actual filings that should drive the next
-    SEC-5.3 hardening increment.
-    """
+    """Report the real SEC corpus available for SEC-5.3 validation."""
     (
         client,
         submissions_client,
@@ -247,14 +306,10 @@ def test_live_corpus_discovery_diagnostic() -> None:
             )
             sections = _assert_extraction_contract(document)
 
-            accession = filing.accession_number
-            is_amended = filing.is_amendment
-            inline_xbrl = _is_inline_xbrl(document)
-
-            if is_amended:
+            if filing.is_amendment:
                 seen_amendments.add(filing.form)
 
-            if inline_xbrl:
+            if _is_inline_xbrl(document):
                 seen_inline_xbrl.add(filing.form)
 
             section_ids = [
@@ -264,31 +319,80 @@ def test_live_corpus_discovery_diagnostic() -> None:
 
             print(
                 f"FORM={filing.form} "
-                f"ACCESSION={accession} "
+                f"ACCESSION={filing.accession_number} "
                 f"FILING_DATE={filing.filing_date} "
                 f"REPORT_DATE={filing.report_date} "
                 f"PRIMARY_DOCUMENT={filing.primary_document} "
                 f"CONTENT_TYPE={document.content_type} "
                 f"BYTES={len(document.content)} "
                 f"SECTIONS={len(sections)} "
-                f"AMENDED={is_amended} "
-                f"INLINE_XBRL={inline_xbrl}"
+                f"AMENDED={filing.is_amendment} "
+                f"INLINE_XBRL={_is_inline_xbrl(document)}"
             )
-            print(
-                f"SECTION_IDS={section_ids}"
-            )
+            print(f"SECTION_IDS={section_ids}")
 
-        print(
-            f"FORMS_SEEN={sorted(seen_forms)}"
-        )
-        print(
-            f"AMENDED_FORMS_SEEN={sorted(seen_amendments)}"
-        )
+        print(f"FORMS_SEEN={sorted(seen_forms)}")
+        print(f"AMENDED_FORMS_SEEN={sorted(seen_amendments)}")
         print(
             f"INLINE_XBRL_FORMS_SEEN={sorted(seen_inline_xbrl)}"
         )
 
         assert seen_forms
+
+    finally:
+        client.close()
+
+
+def test_live_10q_heading_candidate_diagnostic() -> None:
+    """Inspect real 10-Q HTML heading candidates before parser changes."""
+    (
+        client,
+        submissions_client,
+        filings_client,
+    ) = _get_live_clients()
+
+    try:
+        filings = _find_current_supported_filings(
+            submissions_client
+        )
+
+        filing = next(
+            filing
+            for filing in filings
+            if filing.form == "10-Q"
+        )
+
+        document = filings_client.get_primary_document(
+            filing
+        )
+
+        candidates = _extract_heading_candidates_html(
+            document.content,
+            "10-Q",
+        )
+
+        print("\nSEC-5.3 REAL 10-Q HEADING CANDIDATES")
+
+        for candidate in candidates:
+            taxonomy_key = _taxonomy_key(
+                "10-Q",
+                candidate.item_number,
+                candidate.title,
+            )
+
+            print(
+                f"ITEM={candidate.item_number!r} "
+                f"TITLE={candidate.title!r} "
+                f"START={candidate.start_offset} "
+                f"END={candidate.end_offset} "
+                f"TAXONOMY={taxonomy_key!r}"
+            )
+
+        print(
+            f"TOTAL_CANDIDATES={len(candidates)}"
+        )
+
+        assert candidates
 
     finally:
         client.close()

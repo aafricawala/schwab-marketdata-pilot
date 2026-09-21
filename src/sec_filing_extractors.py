@@ -1,4 +1,6 @@
 """
+sec_filing_extractors.py
+
 Deterministic SEC filing section extraction.
 
 SEC-5 responsibilities:
@@ -471,6 +473,10 @@ def _element_text(
     """
     Recover human-readable text contained by an element.
 
+    Adjacent raw text nodes are concatenated directly. This is important for
+    SEC-generated HTML that splits one visible word across nested spans, e.g.
+    'FINA' + 'NCIAL' -> 'FINANCIAL'.
+
     Entity decoding occurs only in this temporary structural representation.
     The original bytes remain untouched and authoritative.
     """
@@ -495,7 +501,7 @@ def _element_text(
 
         pieces.append(decoded)
 
-    return html.unescape(" ".join(pieces))
+    return html.unescape("".join(pieces))
 
 
 def _is_heading_like_element(tag_name: bytes) -> bool:
@@ -504,7 +510,7 @@ def _is_heading_like_element(tag_name: bytes) -> bool:
 
     Standard heading tags are preferred. Common block-level SEC-generated
     containers are also inspected because many filings represent headings
-    with div/p/td/span combinations rather than semantic h1-h6 tags.
+    with div/p/td/span combinations rather than semantic h1-h6.
     """
     return tag_name in _HTML_BLOCK_ELEMENTS or tag_name in {
         b"title",
@@ -527,10 +533,51 @@ def _normalize_html_heading_text(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _has_terminal_page_number(text: str) -> bool:
+    """Return whether a heading title ends with a standalone page number."""
+    normalized = _normalize_html_heading_text(text)
+
+    return bool(re.search(r"\s+\d{1,4}$", normalized))
+
+
 def _matches_item_heading(text: str) -> bool:
     """Return whether normalized text is a complete SEC Item heading."""
     normalized = _normalize_html_heading_text(text)
     return bool(normalized and _ITEM_HEADING_PATTERN.match(normalized))
+
+
+def _has_navigation_ancestor(
+    elements: tuple[_RawHTMLElement, ...],
+    parents: tuple[Optional[int], ...],
+    element_index: int,
+) -> bool:
+    """
+    Return whether an element is contained by a likely TOC/navigation tree.
+
+    SEC HTML tables of contents are commonly represented using table
+    structures or explicit navigation containers. Actual filing headings are
+    structurally outside those containers.
+    """
+    navigation_tags = {
+        b"nav",
+        b"table",
+        b"thead",
+        b"tbody",
+        b"tfoot",
+        b"tr",
+        b"td",
+        b"th",
+    }
+
+    current_index: Optional[int] = element_index
+
+    while current_index is not None:
+        if elements[current_index].tag_name in navigation_tags:
+            return True
+
+        current_index = parents[current_index]
+
+    return False
 
 
 def _has_descendant_item_heading(
@@ -540,13 +587,16 @@ def _has_descendant_item_heading(
     element: _RawHTMLElement,
 ) -> bool:
     """
-    Return whether an element contains a descendant that is itself an Item
-    heading.
+    Return whether an element contains a descendant representing the same
+    complete Item heading.
 
-    This prevents wrapper elements such as <body> and <div> from being
-    misidentified as headings merely because their aggregate text begins
-    with 'Item 7.01'. The actual heading element remains authoritative.
+    Fragmentary nested text such as 'ITEM 1. FINA' must not suppress an
+    enclosing complete heading such as 'ITEM 1. FINANCIAL STATEMENTS'.
     """
+    parent_text = _normalize_html_heading_text(
+        _element_text(content, tokens, element)
+    )
+
     pending = list(element.child_indexes)
     visited: set[int] = set()
 
@@ -563,7 +613,10 @@ def _has_descendant_item_heading(
             _element_text(content, tokens, child)
         )
 
-        if _matches_item_heading(child_text):
+        if (
+            child_text == parent_text
+            and _matches_item_heading(child_text)
+        ):
             return True
 
         pending.extend(child.child_indexes)
@@ -571,20 +624,90 @@ def _has_descendant_item_heading(
     return False
 
 
+def _build_html_parent_indexes(
+    elements: tuple[_RawHTMLElement, ...],
+) -> tuple[Optional[int], ...]:
+    """
+    Build deterministic parent indexes for reconstructed HTML elements.
+
+    The raw element tree stores child relationships only. Parent indexes are
+    derived once so heading recognition can climb from nested inline elements
+    to their semantic block container.
+    """
+    parents: list[Optional[int]] = [None] * len(elements)
+
+    for parent_index, element in enumerate(elements):
+        for child_index in element.child_indexes:
+            if parents[child_index] is None:
+                parents[child_index] = parent_index
+
+    return tuple(parents)
+
+
+def _find_complete_heading_container(
+    elements: tuple[_RawHTMLElement, ...],
+    parents: tuple[Optional[int], ...],
+    tokens: tuple[_RawHTMLToken, ...],
+    content: bytes,
+    element_index: int,
+) -> tuple[int, str] | None:
+    """
+    Find the nearest ancestor containing the complete Item heading text.
+
+    Real SEC inline-XBRL filings may split one visible heading across several
+    nested spans.
+
+    Ancestors containing an excessive amount of text are rejected so a
+    heading cannot absorb the following filing body.
+    """
+    current_index: Optional[int] = element_index
+
+    while current_index is not None:
+        element = elements[current_index]
+
+        if not _is_heading_like_element(element.tag_name):
+            current_index = parents[current_index]
+            continue
+
+        text = _normalize_html_heading_text(
+            _element_text(content, tokens, element)
+        )
+
+        if len(text) > 500:
+            current_index = parents[current_index]
+            continue
+
+        if _matches_item_heading(text):
+            parent_index = parents[current_index]
+
+            if parent_index is not None:
+                parent = elements[parent_index]
+
+                if _is_heading_like_element(parent.tag_name):
+                    parent_text = _normalize_html_heading_text(
+                        _element_text(content, tokens, parent)
+                    )
+
+                    if (
+                        len(parent_text) <= 500
+                        and _matches_item_heading(parent_text)
+                        and parent_text != text
+                    ):
+                        current_index = parent_index
+                        continue
+
+            return current_index, text
+
+        current_index = parents[current_index]
+
+    return None
+
+
 def _candidate_ranges_overlap(
     left: _HeadingCandidate,
     right: _HeadingCandidate,
 ) -> bool:
-    """
-    Return whether two heading candidates occupy overlapping raw ranges.
-
-    Half-open interval semantics are used:
-
-        [start_offset, end_offset)
-
-    Two candidates that merely touch at a boundary are not considered
-    overlapping.
-    """
+    """Return whether two heading candidates occupy overlapping raw ranges."""
     return (
         left.start_offset < right.end_offset
         and right.start_offset < left.end_offset
@@ -606,13 +729,16 @@ def _deduplicate_nested_heading_candidates(
     candidates: list[_HeadingCandidate],
 ) -> tuple[_HeadingCandidate, ...]:
     """
-    Remove nested HTML representations of the same logical heading.
+    Remove duplicate or nested HTML representations of the same heading.
 
-    This is a defensive second layer after descendant filtering. If multiple
-    elements still independently produce the same logical heading, the
-    innermost raw representation is retained.
+    Identical raw ranges are collapsed to one candidate.
 
-    Non-nested occurrences of the same Item remain distinct.
+    When multiple representations of the same Item overlap, the most
+    specific representation is retained. In practice this is the shortest
+    raw range, which prevents a parent block/container from duplicating a
+    semantic heading.
+
+    Non-overlapping occurrences of the same Item remain distinct.
     """
     if not candidates:
         return ()
@@ -629,28 +755,64 @@ def _deduplicate_nested_heading_candidates(
     retained: list[_HeadingCandidate] = []
 
     for group in grouped.values():
+        unique_ranges: dict[
+            tuple[int, int],
+            _HeadingCandidate,
+        ] = {}
+
         for candidate in group:
-            has_more_specific_nested_candidate = False
+            unique_ranges.setdefault(
+                (
+                    candidate.start_offset,
+                    candidate.end_offset,
+                ),
+                candidate,
+            )
 
-            for other in group:
-                if other is candidate:
-                    continue
+        ordered = sorted(
+            unique_ranges.values(),
+            key=lambda candidate: (
+                candidate.start_offset,
+                candidate.end_offset,
+            ),
+        )
 
-                if not _candidate_ranges_overlap(candidate, other):
-                    continue
+        group_retained: list[_HeadingCandidate] = []
 
-                if (
-                    _candidate_contains(candidate, other)
-                    and (
-                        other.start_offset > candidate.start_offset
-                        or other.end_offset < candidate.end_offset
-                    )
-                ):
-                    has_more_specific_nested_candidate = True
-                    break
+        for candidate in ordered:
+            overlapping_indexes: list[int] = []
 
-            if not has_more_specific_nested_candidate:
-                retained.append(candidate)
+            for index, existing in enumerate(group_retained):
+                if _candidate_ranges_overlap(candidate, existing):
+                    overlapping_indexes.append(index)
+
+            if not overlapping_indexes:
+                group_retained.append(candidate)
+                continue
+
+            candidate_length = (
+                candidate.end_offset - candidate.start_offset
+            )
+
+            shortest_existing_index = min(
+                overlapping_indexes,
+                key=lambda index: (
+                    group_retained[index].end_offset
+                    - group_retained[index].start_offset,
+                    group_retained[index].start_offset,
+                    group_retained[index].end_offset,
+                ),
+            )
+
+            existing = group_retained[shortest_existing_index]
+            existing_length = (
+                existing.end_offset - existing.start_offset
+            )
+
+            if candidate_length < existing_length:
+                group_retained[shortest_existing_index] = candidate
+
+        retained.extend(group_retained)
 
     return tuple(
         sorted(
@@ -675,10 +837,11 @@ def _extract_heading_candidates_html(
     Candidate boundaries are taken from the raw element ranges, never from
     parser-generated character offsets.
     """
-    del base_form  # Reserved for future filing-specific HTML rules.
+    del base_form
 
     tokens = _scan_raw_html(content)
     elements = _build_raw_html_elements(content, tokens)
+    parents = _build_html_parent_indexes(elements)
 
     candidates: list[_HeadingCandidate] = []
 
@@ -691,8 +854,11 @@ def _extract_heading_candidates_html(
         b"h6",
     }
 
-    for element in elements:
+    for element_index, element in enumerate(elements):
         if not _is_heading_like_element(element.tag_name):
+            continue
+
+        if _has_navigation_ancestor(elements, parents, element_index):
             continue
 
         text = _normalize_html_heading_text(
@@ -707,9 +873,39 @@ def _extract_heading_candidates_html(
         if not match:
             continue
 
-        # For non-semantic containers, reject wrappers whose descendants
-        # contain the actual heading. This prevents <body>, <div>, <td>, etc.
-        # from becoming duplicate sections based on aggregate descendant text.
+        if _has_terminal_page_number(text):
+            continue
+
+        candidate_index = element_index
+
+        if element.tag_name not in semantic_heading_tags:
+            complete_heading = _find_complete_heading_container(
+                elements,
+                parents,
+                tokens,
+                content,
+                element_index,
+            )
+
+            if complete_heading is not None:
+                candidate_index, text = complete_heading
+                element = elements[candidate_index]
+
+                if _has_navigation_ancestor(
+                    elements,
+                    parents,
+                    candidate_index,
+                ):
+                    continue
+
+                if _has_terminal_page_number(text):
+                    continue
+
+                match = _ITEM_HEADING_PATTERN.match(text)
+
+                if match is None:
+                    continue
+
         if element.tag_name not in semantic_heading_tags:
             if _has_descendant_item_heading(
                 elements,
@@ -852,25 +1048,22 @@ _SECTION_TAXONOMY: Final[dict[str, tuple[tuple[str, str, int], ...]]] = {
 # ---------------------------------------------------------------------------
 
 
-# SEC 8-K item numbers contain a decimal component, e.g. 7.01 and 9.01.
-# The decimal component must therefore be captured as part of the item
-# number rather than interpreted as punctuation preceding the title.
 _ITEM_HEADING_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"^[ \t]*ITEM[ \t]+"
+    r"^[ \t]*ITEM\s+"
     r"(?P<number>\d+(?:\.\d+)?)"
     r"(?P<letter>[A-Z])?"
-    r"(?:[ \t]*[.:)\-–—]?[ \t]*)"
+    r"(?:\s*[.:)\-–—]?\s*)"
     r"(?P<title>.*?)"
-    r"[ \t]*$",
+    r"\s*$",
     re.IGNORECASE,
 )
 
 
 _PART_HEADING_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"^[ \t]*PART[ \t]+(?P<part>[IVX]+)"
-    r"(?:[ \t]*[.:)\-–—]?[ \t]*)"
+    r"^[ \t]*PART\s+(?P<part>[IVX]+)"
+    r"(?:\s*[.:)\-–—]?\s*)"
     r"(?P<title>.*?)"
-    r"[ \t]*$",
+    r"\s*$",
     re.IGNORECASE,
 )
 
@@ -1048,7 +1241,7 @@ def _extract_heading_candidates(
     base_form: str,
 ) -> tuple[_HeadingCandidate, ...]:
     """Identify structurally plausible Item headings in plain-text content."""
-    del base_form  # Reserved for future filing-specific plain-text rules.
+    del base_form
 
     text = _decode_plain_text(content)
     line_offsets = _line_start_offsets(content)
@@ -1111,7 +1304,7 @@ def _taxonomy_key(
     title: str,
 ) -> str | None:
     """Resolve an Item heading to the deterministic filing taxonomy."""
-    normalized_title = _normalize_title(title)
+    normalized_title = _normalize_title(title).replace("’", "'")
 
     if base_form == "10-K":
         return f"ITEM_{item_number}"
@@ -1149,7 +1342,18 @@ def _taxonomy_key(
         if item_number == "1" and normalized_title in title_to_part_ii:
             return title_to_part_ii[normalized_title]
 
-        if item_number in {"2", "3", "4"} and normalized_title in title_to_part_i:
+        # 10-Q Part I Item 2 commonly expands the taxonomy title to:
+        # "Management's Discussion and Analysis of Financial Condition
+        #  and Results of Operations".
+        if (
+            item_number == "2"
+            and normalized_title.startswith(
+                _normalize_title("Management's Discussion and Analysis")
+            )
+        ):
+            return "PART_I_ITEM_2"
+
+        if item_number in {"3", "4"} and normalized_title in title_to_part_i:
             return f"PART_I_ITEM_{item_number}"
 
         if item_number in {"1A", "2", "3", "4", "5", "6"}:
@@ -1166,9 +1370,7 @@ def _extract_sections_from_candidates(
     base_form: str,
     candidates: tuple[_HeadingCandidate, ...],
 ) -> tuple[SECFilingSection, ...]:
-    """
-    Convert recognized heading candidates into immutable evidence sections.
-    """
+    """Convert recognized heading candidates into immutable evidence sections."""
     taxonomy = _build_taxonomy(base_form)
 
     recognized: list[tuple[_HeadingCandidate, _TaxonomyEntry]] = []
