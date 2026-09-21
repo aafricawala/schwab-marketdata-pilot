@@ -510,7 +510,7 @@ def _is_heading_like_element(tag_name: bytes) -> bool:
 
     Standard heading tags are preferred. Common block-level SEC-generated
     containers are also inspected because many filings represent headings
-    with div/p/td/span combinations rather than semantic h1-h6.
+    with div/p/td/span combinations rather than semantic h1-h6 tags.
     """
     return tag_name in _HTML_BLOCK_ELEMENTS or tag_name in {
         b"title",
@@ -580,23 +580,22 @@ def _has_navigation_ancestor(
     return False
 
 
-def _has_descendant_item_heading(
+def _has_descendant_complete_item_heading(
     elements: tuple[_RawHTMLElement, ...],
     tokens: tuple[_RawHTMLToken, ...],
     content: bytes,
     element: _RawHTMLElement,
 ) -> bool:
     """
-    Return whether an element contains a descendant representing the same
-    complete Item heading.
+    Return whether an element contains a complete descendant Item heading.
 
-    Fragmentary nested text such as 'ITEM 1. FINA' must not suppress an
-    enclosing complete heading such as 'ITEM 1. FINANCIAL STATEMENTS'.
+    This prevents broad containers such as <body> or <div> from being
+    interpreted as headings merely because their aggregate text begins with
+    an Item heading.
+
+    Fragmentary descendants are intentionally ignored so split headings such
+    as 'FINA' + 'NCIAL' can still be recognized from their enclosing element.
     """
-    parent_text = _normalize_html_heading_text(
-        _element_text(content, tokens, element)
-    )
-
     pending = list(element.child_indexes)
     visited: set[int] = set()
 
@@ -613,10 +612,7 @@ def _has_descendant_item_heading(
             _element_text(content, tokens, child)
         )
 
-        if (
-            child_text == parent_text
-            and _matches_item_heading(child_text)
-        ):
+        if _matches_item_heading(child_text):
             return True
 
         pending.extend(child.child_indexes)
@@ -879,6 +875,14 @@ def _extract_heading_candidates_html(
         candidate_index = element_index
 
         if element.tag_name not in semantic_heading_tags:
+            if _has_descendant_complete_item_heading(
+                elements,
+                tokens,
+                content,
+                element,
+            ):
+                continue
+
             complete_heading = _find_complete_heading_container(
                 elements,
                 parents,
@@ -906,15 +910,6 @@ def _extract_heading_candidates_html(
                 if match is None:
                     continue
 
-        if element.tag_name not in semantic_heading_tags:
-            if _has_descendant_item_heading(
-                elements,
-                tokens,
-                content,
-                element,
-            ):
-                continue
-
         number = match.group("number")
         letter = match.group("letter") or ""
         item_number = f"{number}{letter}".upper()
@@ -922,7 +917,15 @@ def _extract_heading_candidates_html(
 
         if not title:
             continue
-
+        
+        if element.tag_name not in semantic_heading_tags:
+            if _has_descendant_complete_item_heading(
+                elements,
+                tokens,
+                content,
+                element,
+            ):
+                continue
         candidates.append(
             _HeadingCandidate(
                 item_number=item_number,
@@ -1342,9 +1345,6 @@ def _taxonomy_key(
         if item_number == "1" and normalized_title in title_to_part_ii:
             return title_to_part_ii[normalized_title]
 
-        # 10-Q Part I Item 2 commonly expands the taxonomy title to:
-        # "Management's Discussion and Analysis of Financial Condition
-        #  and Results of Operations".
         if (
             item_number == "2"
             and normalized_title.startswith(
@@ -1508,3 +1508,4 @@ def extract_sections(
         return _extract_sections_html(document, base_form)
 
     return _extract_sections_plain_text(document, base_form)
+
