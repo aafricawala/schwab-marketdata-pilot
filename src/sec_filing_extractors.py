@@ -391,7 +391,7 @@ def _build_raw_html_elements(
     tokens: tuple[_RawHTMLToken, ...],
 ) -> tuple[_RawHTMLElement, ...]:
     """
-    Reconstruct a tolerant element tree from raw HTML tokens.
+    Reconstruct a tolerant element tree from raw tokens.
 
     This is intentionally not a standards-complete HTML parser. Its purpose
     is limited to recovering source ranges and parent/child relationships
@@ -512,6 +512,159 @@ def _is_heading_like_element(tag_name: bytes) -> bool:
     }
 
 
+# ---------------------------------------------------------------------------
+# HTML heading candidate filtering
+# ---------------------------------------------------------------------------
+
+
+def _normalize_html_heading_text(text: str) -> str:
+    """
+    Normalize HTML-derived heading text for structural comparison.
+
+    Unicode whitespace is intentionally normalized because SEC HTML commonly
+    uses characters such as U+2009 THIN SPACE between 'Item' and the number.
+    """
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _matches_item_heading(text: str) -> bool:
+    """Return whether normalized text is a complete SEC Item heading."""
+    normalized = _normalize_html_heading_text(text)
+    return bool(normalized and _ITEM_HEADING_PATTERN.match(normalized))
+
+
+def _has_descendant_item_heading(
+    elements: tuple[_RawHTMLElement, ...],
+    tokens: tuple[_RawHTMLToken, ...],
+    content: bytes,
+    element: _RawHTMLElement,
+) -> bool:
+    """
+    Return whether an element contains a descendant that is itself an Item
+    heading.
+
+    This prevents wrapper elements such as <body> and <div> from being
+    misidentified as headings merely because their aggregate text begins
+    with 'Item 7.01'. The actual heading element remains authoritative.
+    """
+    pending = list(element.child_indexes)
+    visited: set[int] = set()
+
+    while pending:
+        child_index = pending.pop()
+
+        if child_index in visited:
+            continue
+
+        visited.add(child_index)
+
+        child = elements[child_index]
+        child_text = _normalize_html_heading_text(
+            _element_text(content, tokens, child)
+        )
+
+        if _matches_item_heading(child_text):
+            return True
+
+        pending.extend(child.child_indexes)
+
+    return False
+
+
+def _candidate_ranges_overlap(
+    left: _HeadingCandidate,
+    right: _HeadingCandidate,
+) -> bool:
+    """
+    Return whether two heading candidates occupy overlapping raw ranges.
+
+    Half-open interval semantics are used:
+
+        [start_offset, end_offset)
+
+    Two candidates that merely touch at a boundary are not considered
+    overlapping.
+    """
+    return (
+        left.start_offset < right.end_offset
+        and right.start_offset < left.end_offset
+    )
+
+
+def _candidate_contains(
+    outer: _HeadingCandidate,
+    inner: _HeadingCandidate,
+) -> bool:
+    """Return whether one candidate raw range contains another."""
+    return (
+        outer.start_offset <= inner.start_offset
+        and outer.end_offset >= inner.end_offset
+    )
+
+
+def _deduplicate_nested_heading_candidates(
+    candidates: list[_HeadingCandidate],
+) -> tuple[_HeadingCandidate, ...]:
+    """
+    Remove nested HTML representations of the same logical heading.
+
+    This is a defensive second layer after descendant filtering. If multiple
+    elements still independently produce the same logical heading, the
+    innermost raw representation is retained.
+
+    Non-nested occurrences of the same Item remain distinct.
+    """
+    if not candidates:
+        return ()
+
+    grouped: dict[tuple[str, str], list[_HeadingCandidate]] = {}
+
+    for candidate in candidates:
+        identity = (
+            candidate.item_number,
+            _normalize_title(candidate.title),
+        )
+        grouped.setdefault(identity, []).append(candidate)
+
+    retained: list[_HeadingCandidate] = []
+
+    for group in grouped.values():
+        for candidate in group:
+            has_more_specific_nested_candidate = False
+
+            for other in group:
+                if other is candidate:
+                    continue
+
+                if not _candidate_ranges_overlap(candidate, other):
+                    continue
+
+                if (
+                    _candidate_contains(candidate, other)
+                    and (
+                        other.start_offset > candidate.start_offset
+                        or other.end_offset < candidate.end_offset
+                    )
+                ):
+                    has_more_specific_nested_candidate = True
+                    break
+
+            if not has_more_specific_nested_candidate:
+                retained.append(candidate)
+
+    return tuple(
+        sorted(
+            retained,
+            key=lambda item: (
+                item.start_offset,
+                item.end_offset,
+                item.item_number,
+                _normalize_title(item.title),
+            ),
+        )
+    )
+
+
 def _extract_heading_candidates_html(
     content: bytes,
     base_form: str,
@@ -529,15 +682,22 @@ def _extract_heading_candidates_html(
 
     candidates: list[_HeadingCandidate] = []
 
+    semantic_heading_tags = {
+        b"h1",
+        b"h2",
+        b"h3",
+        b"h4",
+        b"h5",
+        b"h6",
+    }
+
     for element in elements:
         if not _is_heading_like_element(element.tag_name):
             continue
 
-        text = _element_text(content, tokens, element)
-
-        # Collapse HTML whitespace, including Unicode whitespace such as
-        # U+2009 THIN SPACE used by some real SEC filings.
-        text = re.sub(r"\s+", " ", text).strip()
+        text = _normalize_html_heading_text(
+            _element_text(content, tokens, element)
+        )
 
         if not text or len(text) > 500:
             continue
@@ -547,6 +707,18 @@ def _extract_heading_candidates_html(
         if not match:
             continue
 
+        # For non-semantic containers, reject wrappers whose descendants
+        # contain the actual heading. This prevents <body>, <div>, <td>, etc.
+        # from becoming duplicate sections based on aggregate descendant text.
+        if element.tag_name not in semantic_heading_tags:
+            if _has_descendant_item_heading(
+                elements,
+                tokens,
+                content,
+                element,
+            ):
+                continue
+
         number = match.group("number")
         letter = match.group("letter") or ""
         item_number = f"{number}{letter}".upper()
@@ -554,42 +726,6 @@ def _extract_heading_candidates_html(
 
         if not title:
             continue
-
-        if element.tag_name not in {
-            b"h1",
-            b"h2",
-            b"h3",
-            b"h4",
-            b"h5",
-            b"h6",
-        }:
-            nested_heading_exists = False
-
-            for child_index in element.child_indexes:
-                child = elements[child_index]
-
-                if child.tag_name not in {
-                    b"h1",
-                    b"h2",
-                    b"h3",
-                    b"h4",
-                    b"h5",
-                    b"h6",
-                }:
-                    continue
-
-                child_text = re.sub(
-                    r"\s+",
-                    " ",
-                    _element_text(content, tokens, child),
-                ).strip()
-
-                if _ITEM_HEADING_PATTERN.match(child_text):
-                    nested_heading_exists = True
-                    break
-
-            if nested_heading_exists:
-                continue
 
         candidates.append(
             _HeadingCandidate(
@@ -600,31 +736,7 @@ def _extract_heading_candidates_html(
             )
         )
 
-    deduplicated: list[_HeadingCandidate] = []
-    seen: set[tuple[int, str, str]] = set()
-
-    for candidate in sorted(
-        candidates,
-        key=lambda item: (
-            item.start_offset,
-            item.end_offset,
-            item.item_number,
-            item.title.casefold(),
-        ),
-    ):
-        identity = (
-            candidate.start_offset,
-            candidate.item_number,
-            _normalize_title(candidate.title),
-        )
-
-        if identity in seen:
-            continue
-
-        seen.add(identity)
-        deduplicated.append(candidate)
-
-    return tuple(deduplicated)
+    return _deduplicate_nested_heading_candidates(candidates)
 
 
 # ---------------------------------------------------------------------------
@@ -752,6 +864,7 @@ _ITEM_HEADING_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"[ \t]*$",
     re.IGNORECASE,
 )
+
 
 _PART_HEADING_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^[ \t]*PART[ \t]+(?P<part>[IVX]+)"
