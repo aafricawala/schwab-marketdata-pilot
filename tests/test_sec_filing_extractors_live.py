@@ -1,4 +1,6 @@
-"""Live integration tests for deterministic SEC filing section extraction.
+"""
+test_sec_filing_extractors_live.py
+Live integration tests for deterministic SEC filing section extraction.
 
 These tests retrieve real SEC EDGAR filing documents through the existing
 SEC-3/SEC-4 production clients and validate SEC-5.3 extraction behavior.
@@ -92,7 +94,7 @@ def _find_current_supported_filings(
 
 def _assert_extraction_contract(
     document: SECFilingDocument,
-) -> None:
+) -> tuple:
     """Validate the core SEC-5 section extraction contract."""
     sections = extract_sections(document)
 
@@ -119,6 +121,20 @@ def _assert_extraction_contract(
         assert section.section_title
         assert section.section_level >= 1
         assert section.occurrence >= 1
+
+    return sections
+
+
+def _is_inline_xbrl(document: SECFilingDocument) -> bool:
+    """Detect inline-XBRL markup without interpreting filing data."""
+    content_lower = document.content.lower()
+
+    return (
+        b"<ix:"
+        in content_lower
+        or b"</ix:"
+        in content_lower
+    )
 
 
 def test_live_current_supported_filing_extraction() -> None:
@@ -190,6 +206,89 @@ def test_live_supported_form_extraction_when_available() -> None:
             assert document.content
 
             _assert_extraction_contract(document)
+
+    finally:
+        client.close()
+
+
+def test_live_corpus_discovery_diagnostic() -> None:
+    """Report the real SEC corpus available for SEC-5.3 validation.
+
+    This test intentionally does not modify production behavior or require
+    every corpus category to exist in the current recent-filings window.
+    Its purpose is to expose the actual filings that should drive the next
+    SEC-5.3 hardening increment.
+    """
+    (
+        client,
+        submissions_client,
+        filings_client,
+    ) = _get_live_clients()
+
+    try:
+        filings = _find_current_supported_filings(
+            submissions_client
+        )
+
+        seen_forms: set[str] = set()
+        seen_amendments: set[str] = set()
+        seen_inline_xbrl: set[str] = set()
+
+        print("\nSEC-5.3 LIVE CORPUS")
+
+        for filing in filings:
+            if filing.form in seen_forms:
+                continue
+
+            seen_forms.add(filing.form)
+
+            document = filings_client.get_primary_document(
+                filing
+            )
+            sections = _assert_extraction_contract(document)
+
+            accession = filing.accession_number
+            is_amended = filing.is_amendment
+            inline_xbrl = _is_inline_xbrl(document)
+
+            if is_amended:
+                seen_amendments.add(filing.form)
+
+            if inline_xbrl:
+                seen_inline_xbrl.add(filing.form)
+
+            section_ids = [
+                section.section_id
+                for section in sections
+            ]
+
+            print(
+                f"FORM={filing.form} "
+                f"ACCESSION={accession} "
+                f"FILING_DATE={filing.filing_date} "
+                f"REPORT_DATE={filing.report_date} "
+                f"PRIMARY_DOCUMENT={filing.primary_document} "
+                f"CONTENT_TYPE={document.content_type} "
+                f"BYTES={len(document.content)} "
+                f"SECTIONS={len(sections)} "
+                f"AMENDED={is_amended} "
+                f"INLINE_XBRL={inline_xbrl}"
+            )
+            print(
+                f"SECTION_IDS={section_ids}"
+            )
+
+        print(
+            f"FORMS_SEEN={sorted(seen_forms)}"
+        )
+        print(
+            f"AMENDED_FORMS_SEEN={sorted(seen_amendments)}"
+        )
+        print(
+            f"INLINE_XBRL_FORMS_SEEN={sorted(seen_inline_xbrl)}"
+        )
+
+        assert seen_forms
 
     finally:
         client.close()

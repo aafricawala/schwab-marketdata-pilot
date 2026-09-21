@@ -1,4 +1,7 @@
-"""Offline unit tests for deterministic SEC filing section extraction.
+"""
+test_sec_filing_extractors_mock.py
+
+Offline unit tests for deterministic SEC filing section extraction.
 
 Coverage:
 - SEC-5.1 plain-text section extraction contract.
