@@ -1,32 +1,28 @@
 """
 schwab_raw_marketdata.py
 ========================================================================================
-Institutional Charles Schwab Raw Market Data Ingestion & Normalization Engine
+CHARLES SCHWAB IN-MEMORY RAW DATA INGESTION & NORMALIZATION ENGINE (v16.21)
 ========================================================================================
-Institutional Grade Charles Schwab Market Data Extraction & Sanitization Engine.
-Conforms strictly to Institutional Risk & Master Thesis Protocol (v16.20).
-
-Production Guarantees & Audit Compliance:
-  - ADD-01: Pass-through unscaled raw marketCap directly from Quotes fundamentals.
-  - ADD-02: Emit explicit div_freq_source metadata ('VENDOR' | 'ASSUMED_QUARTERLY' | 'UNKNOWN').
-  - ADD-03 / PAY-18 / PAY-22: Emit full rejection_telemetry for option parsing.
-  - SAFE-01: Eliminate fail-open defaults on shortability; emit explicit completeness envelopes.
-  - SAFE-02: Tag totalDebtToEquity as VENDOR_RAW_UNVERIFIED with scale risk tracking.
-  - SAFE-03: Sanitize exception strings in logger statements to prevent credential/payload leaks.
-  - REF-01: Closed-form dividend normalizer with discrete frequency whitelisting (M1) and
-            hybridized absolute/relative tolerance anchoring (N1, N2, N3).
-  - REF-02 / PAY-04 / PAY-10: Purge silent 0.0 fallbacks for volume averages; emit VENDOR_SUSPECT_ZERO
-            on liquid symbols (>1M shares) and include in completeness gating.
-  - REF-03: Enforce strict non-negative float guards on option bid, ask, and mark.
-  - REF-04: Robust parsing of option expiration keys guarding against malformed vendor splits.
-  - REF-05 / PAY-08: Pairwise margin checks; standardized reason token 'vendor_net_and_operating_margins_identical'.
-  - REF-06: Four-state enum completeness envelopes for short reference payloads.
-  - OPT-02: Deterministic option expiration tie-breaking with parameterized tenor preference.
-  - CLAR-01: Enforce clean 3-state passthrough enum for liquidity block.
-  - CLAR-02: Standardize all dividend yield outputs to 4 decimal places.
-  - CLAR-03: Capture quote timestamp parsing exceptions with structured logger.debug taxonomy.
-  - PRUNE-01: Clean function signature of extract_market_open_status by removing dead tz argument.
-  - PAY-02 / PAY-12: Rename raw options chain volatility metadata to vendor_raw_chain_volatility_metadata.
+Implements:
+  - ADD-01: Passthrough of raw marketCap directly from Quotes fundamentals.
+  - SAFE-01 / REF-06: Strict 3-state envelope for borrow locate (FULL_PASSTHROUGH,
+    PARTIAL_PASSTHROUGH, UNKNOWN) with zero fail-open defaults.
+  - SAFE-02: totalDebtToEquity tagged VENDOR_RAW_UNVERIFIED without magnitude inference.
+  - SAFE-03: Sanitized logger exceptions to prevent credential/vendor context leaks.
+  - REF-01: Dynamic cent-anchored hybrid tolerance dividend yield normalizer with
+    discrete frequency whitelist (ALLOWED_DIV_FREQS = {1.0, 2.0, 4.0, 12.0}).
+  - ADD-02: Strict div_freq_source provenance tracking.
+  - REF-02 / PAY-04 / PAY-10: Purged silent 0.0 volume averages; tagged VENDOR_SUSPECT_ZERO.
+  - REF-03 / REF-04 / ADD-03: Non-negative option price guards, robust split parsing,
+    and explicit contract rejection telemetry.
+  - OPT-02: Deterministic secondary sort on resolve_optimal_expirations.
+  - CLAR-01: 3-state liquidity block envelope; chain_implied_volatility extraction.
+  - PRUNE-01: Single-argument extract_market_open_status(client).
+  - PAY-24 / PAY-35 / PAY-36 / PAY-47: 3-tenor expiration bracketing engine (Front,
+    Near-Sub <=30 DTE, Near-Sup >30 DTE) with skip telemetry (DTE_BELOW_MINIMUM_4).
+  - PAY-32 / PAY-40 / PAY-41 / PAY-46 / PAY-51 / PAY-52 / PAY-53: 5-state margin-gated
+    fundamentals zero sanitizer with denominator availability checks.
+  - PAY-54: Frozen module constants for diagnostic reason codes and states.
 ========================================================================================
 """
 
@@ -39,6 +35,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 from zoneinfo import ZoneInfo
 
+import numpy as np
 import pandas as pd
 
 from schwab_client import SchwabClient
@@ -46,142 +43,171 @@ from schwab_client import SchwabClient
 logger = logging.getLogger("schwab_raw_marketdata")
 logger.addHandler(logging.NullHandler())
 
-# Discrete institutional distribution frequency whitelist (M1)
-ALLOWED_DIV_FREQS: Set[float] = {1.0, 2.0, 4.0, 12.0}
+# ------------------------------------------------------------------------------
+# CONSTANTS & PROTOCOL TOKENS (PAY-54)
+# ------------------------------------------------------------------------------
+DATA_SCHEMA_VERSION = "16.21"
+PROTOCOL_VERSION = "v16.21"
 
-# Standard ticker regex supporting equities, ADRs, indices, and share classes
+REASON_DTE_BELOW_MINIMUM_4 = "DTE_BELOW_MINIMUM_4"
+REASON_SKEW_SPREAD_TOLERANCE_EXCEEDED = "skew_wing_liquidity_insufficient_relative_spread_exceeds_tolerance"
+REASON_MARKET_CAP_INTEGRITY_FAILURE = "upstream_market_cap_divergence_integrity_failure"
+
+STATE_AS_REPORTED = "AS_REPORTED"
+STATE_AS_REPORTED_POSITIVE_MARGIN = "AS_REPORTED_ZERO_WITH_POSITIVE_MARGIN"
+STATE_VENDOR_UNAVAILABLE_NEG_EARNINGS = "VENDOR_UNAVAILABLE_NEGATIVE_EARNINGS"
+STATE_VENDOR_UNAVAILABLE_NEG_OP_INCOME = "VENDOR_UNAVAILABLE_NEGATIVE_OPERATING_INCOME"
+STATE_ZERO_NET_MARGIN_MISSING = "VENDOR_ZERO_UNCORROBORATED_NET_MARGIN_MISSING"
+STATE_DROPOUT_MISSING_PROFITABILITY = "VENDOR_UNAVAILABLE_MISSING_PROFITABILITY_DATA"
+STATE_MISSING_DENOMINATOR_EQUITY = "VENDOR_UNAVAILABLE_NEGATIVE_OR_MISSING_EQUITY"
+STATE_MISSING_DENOMINATOR_ASSETS = "VENDOR_UNAVAILABLE_MISSING_ASSET_BASE"
+
+ALLOWED_DIV_FREQS: Set[float] = {1.0, 2.0, 4.0, 12.0}
 SYMBOL_REGEX = re.compile(r"^[$A-Z0-9.-_/ ]{1,30}$")
 
 
-def _clean_numeric_val(val: Any) -> Optional[float]:
-    """Safely coerces currency strings, numeric representations, or NaN to float primitives."""
-    if val is None or pd.isna(val):
+# ------------------------------------------------------------------------------
+# NUMERIC & SANITIZATION UTILITIES
+# ------------------------------------------------------------------------------
+def sanitize_and_validate_symbols(raw_symbol: str) -> str:
+    """Cleans, validates, and standardizes ticker symbols."""
+    sym = raw_symbol.strip().upper()
+    if not SYMBOL_REGEX.match(sym):
+        raise ValueError(f"Invalid symbol format: '{raw_symbol}'")
+    return sym
+
+
+def _safe_float(val: Any) -> Optional[float]:
+    """Defensive float conversion stripping currency symbols and commas."""
+    if val is None:
         return None
     if isinstance(val, (int, float)):
-        f_val = float(val)
-        return None if (math.isnan(f_val) or math.isinf(f_val)) else f_val
+        if math.isnan(val) or math.isinf(val):
+            return None
+        return float(val)
     if isinstance(val, str):
         cleaned = val.replace("$", "").replace(",", "").strip()
+        if not cleaned:
+            return None
         try:
-            f_val = float(cleaned)
-            return None if (math.isnan(f_val) or math.isinf(f_val)) else f_val
-        except (ValueError, TypeError):
+            f = float(cleaned)
+            return None if math.isnan(f) or math.isinf(f) else f
+        except ValueError:
             return None
     return None
-
-
-def _sanitize_exc(exc: Exception) -> str:
-    """Sanitizes exception messages to prevent leaking auth headers or query parameters (SAFE-03)."""
-    msg = str(exc)
-    msg = re.sub(r"(Bearer\s+)[A-Za-z0-9\-._~+/]+=*", r"\1[REDACTED]", msg, flags=re.IGNORECASE)
-    msg = re.sub(r"(client_secret=)[^&]+", r"\1[REDACTED]", msg, flags=re.IGNORECASE)
-    msg = re.sub(r"(api_key=)[^&]+", r"\1[REDACTED]", msg, flags=re.IGNORECASE)
-    return msg
-
-
-def sanitize_and_validate_symbols(raw_symbol: str) -> str:
-    """Validates and standardizes a ticker symbol against exchange syntax."""
-    if not isinstance(raw_symbol, str):
-        raise ValueError(f"Ticker symbol must be a string, received: {type(raw_symbol)}")
-    symbol = raw_symbol.strip().upper()
-    if not SYMBOL_REGEX.match(symbol):
-        raise ValueError(f"Ticker symbol '{symbol}' violates standard exchange formatting.")
-    return symbol
 
 
 def normalize_dividend_yield(
     div_yield_raw: Optional[float],
     div_amount: Optional[float],
     div_freq: Optional[float],
-    div_freq_source: str,  # "VENDOR" | "ASSUMED_QUARTERLY" | "UNKNOWN"
+    div_freq_source: str,
     spot_ref: Optional[float],
 ) -> Tuple[Optional[float], str]:
     """
-    Forensically reconciles vendor-reported dividend yield against periodic cash distributions (REF-01).
-    Adheres to Protocol Step 0.4 (Vintage Alignment & Denominator Sanity) and Step 0.5 (Taxonomy).
+    Implements REF-01 dynamic hybrid tolerance normalizer with discrete frequency whitelist.
+    Guarantees idempotency and protects against floating-point dust.
     """
-    if div_yield_raw is None:
-        return None, "UNKNOWN"
+    if div_yield_raw is None or spot_ref is None or spot_ref <= 0.0:
+        return None, "NO_DIVIDEND_OR_INVALID_INPUT"
 
-    # N2: Sub-basis-point yield guard (floating-point dust protection)
+    div_yield_raw = float(div_yield_raw)
     if div_yield_raw < 0.01:
         return round(div_yield_raw, 4), "VENDOR_UNVERIFIED"
 
-    # Pre-flight check for direct yield derivation
-    if spot_ref is None or spot_ref <= 0.0 or div_amount is None or div_amount <= 0.0:
+    if div_amount is None or div_amount <= 0.0:
         return round(div_yield_raw, 4), "VENDOR_UNVERIFIED"
 
-    yield_direct = (div_amount / spot_ref) * 100.0
+    yield_direct = (float(div_amount) / float(spot_ref)) * 100.0
+    tol = max(0.05 * div_yield_raw, (0.01 / float(spot_ref)) * 100.0)
 
-    # N1: Anchored dynamic tolerance (greater of 5% relative discrepancy or 1-cent absolute yield)
-    cent_yield_bound = (0.01 / spot_ref) * 100.0
-    tol = max(0.05 * abs(div_yield_raw), cent_yield_bound)
-
-    # Branch 1: Direct Yield Confirmation (e.g., ADR annual distribution or pre-annualized vendor yield)
+    # Branch 1: Direct annual confirmation
     if abs(yield_direct - div_yield_raw) <= tol:
         return round(div_yield_raw, 4), "DIRECT_CONFIRMED"
 
-    # Branch 2: Periodic Distribution Annualization (e.g., US domestic quarterly payer)
+    # Branch 2: Vendor frequency periodic annualization
     if (
         div_freq_source == "VENDOR"
         and div_freq is not None
-        and div_freq > 0
-        and div_freq in ALLOWED_DIV_FREQS
+        and div_freq > 0.0
+        and float(div_freq) in ALLOWED_DIV_FREQS
     ):
-        scaled_yield = yield_direct * div_freq
+        scaled_yield = yield_direct * float(div_freq)
         if abs(scaled_yield - div_yield_raw) <= tol:
             return round(scaled_yield, 4), "ANNUALIZED_FROM_PERIODIC"
 
-    # Branch 3: Fallback for unresolvable discrepancies or unverified frequencies
     return round(div_yield_raw, 4), "VENDOR_UNVERIFIED"
 
 
-def parse_price_history_to_df(raw: Dict[str, Any]) -> pd.DataFrame:
-    """Parses raw Schwab price history candles into a typed DataFrame with monotonic sorting."""
-    candles = raw.get("candles", [])
-    if not candles:
-        return pd.DataFrame()
-    df = pd.DataFrame(candles)
+def _sanitize_fundamentals_ratio(
+    raw_val: Any,
+    field_name: str,
+    net_margin: Optional[float],
+    op_margin: Optional[float],
+    denominator_available: bool = True,
+) -> Tuple[Optional[float], str]:
+    """
+    Evaluates raw fundamental ratios against Step 0.4 denominator gates and
+    the PAY-46 / PAY-51 / PAY-52 5-state margin-gated decision table.
+    """
+    cleaned = _safe_float(raw_val)
+    if cleaned is None:
+        return None, "VENDOR_UNAVAILABLE"
 
-    time_cols = [c for c in ["datetime", "epoch", "time", "date"] if c in df.columns]
-    if time_cols:
-        t_col = time_cols[0]
-        df[t_col] = pd.to_numeric(df[t_col], errors="coerce")
-        df = df.dropna(subset=[t_col]).sort_values(by=t_col, ascending=True)
-        df = df.drop_duplicates(subset=[t_col], keep="last")
+    # Non-zero passthrough
+    if abs(cleaned) > 1e-6:
+        return cleaned, STATE_AS_REPORTED
 
-    for col in ["open", "high", "low", "close", "volume"]:
-        if col in df.columns:
-            if df[col].dtype == object:
-                df[col] = (
-                    df[col]
-                    .astype(str)
-                    .str.replace("$", "", regex=False)
-                    .str.replace(",", "", regex=False)
-                    .str.strip()
-                )
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-    return df
+    # Special handling for standalone zero-swarm variables (PAY-32, PAY-40)
+    if field_name == "beta":
+        return None, "VENDOR_UNAVAILABLE_OR_ZERO"
+    if field_name == "pegRatio":
+        return None, "VENDOR_ZERO_NON_MEANINGFUL"
+    if field_name == "pcfRatio":
+        return None, "NON_POSITIVE_OR_UNAVAILABLE"
+    if field_name == "revChangeYear":
+        if op_margin is not None and op_margin < 0.0:
+            return None, "VENDOR_ZERO_UNVERIFIED"
+        return 0.0, STATE_AS_REPORTED
+
+    # Margin-gated fields (ROE, ROA)
+    if field_name in ("returnOnEquity", "returnOnAssets"):
+        # Stage 1: Denominator Sanity Gate (PAY-53)
+        if not denominator_available:
+            return (
+                None,
+                STATE_MISSING_DENOMINATOR_EQUITY
+                if field_name == "returnOnEquity"
+                else STATE_MISSING_DENOMINATOR_ASSETS,
+            )
+
+        # Stage 2: 5-State Margin Decision Table
+        if net_margin is not None and net_margin < 0.0:
+            return None, STATE_VENDOR_UNAVAILABLE_NEG_EARNINGS
+        if net_margin is not None and net_margin > 0.0:
+            return 0.0, STATE_AS_REPORTED_POSITIVE_MARGIN
+        if net_margin is None and op_margin is not None and op_margin < 0.0:
+            return None, STATE_VENDOR_UNAVAILABLE_NEG_OP_INCOME
+        if net_margin is None and op_margin is not None and op_margin >= 0.0:
+            return None, STATE_ZERO_NET_MARGIN_MISSING
+        if net_margin is None and op_margin is None:
+            return None, STATE_DROPOUT_MISSING_PROFITABILITY
+
+    return cleaned, STATE_AS_REPORTED
 
 
+# ------------------------------------------------------------------------------
+# EXTRACTION ROUTINES
+# ------------------------------------------------------------------------------
 def extract_market_open_status(client: SchwabClient) -> Optional[bool]:
-    """Queries Schwab to determine whether the equity market is open today (PRUNE-01)."""
+    """Single-argument interface aligned with SchwabClient (PRUNE-01)."""
     try:
         if hasattr(client, "get_market_hours"):
-            try:
-                raw_hours = client.get_market_hours("equity")
-            except TypeError:
-                raw_hours = client.get_market_hours()
-
+            raw_hours = client.get_market_hours(markets="equity")
             if isinstance(raw_hours, dict):
-                if "isOpen" in raw_hours:
-                    return bool(raw_hours.get("isOpen", False))
-                equity_block = raw_hours.get("equity", {})
-                if "EQ" in equity_block and isinstance(equity_block["EQ"], dict):
-                    return bool(equity_block["EQ"].get("isOpen", False))
-                return bool(equity_block.get("isOpen", False))
+                return raw_hours.get("equity", {}).get("EQ", {}).get("isOpen", False)
     except Exception as exc:
-        logger.warning("MarketHours retrieval skipped: %s", _sanitize_exc(exc))
+        logger.debug("Market hours retrieval skipped: %s", type(exc).__name__)
     return None
 
 
@@ -189,13 +215,17 @@ def extract_strict_underlying_data(
     client: SchwabClient, symbol: str, tz: ZoneInfo
 ) -> Dict[str, Any]:
     """
-    Extracts underlying quote, fundamental ratios, reference borrow data, and sizing metrics.
-    Enforces strict risk envelopes, zero-denominator protections, and margin sanity checks.
+    Extracts underlying fundamentals, quotes, and borrow locate data into
+    Protocol v16.21-compliant structured payloads.
     """
-    clean_sym = sanitize_and_validate_symbols(symbol)
-    raw_payload = client.get_quote(symbol=clean_sym, fields="quote,fundamental,reference")
-    payload = raw_payload.get(clean_sym, raw_payload)
+    sym = sanitize_and_validate_symbols(symbol)
+    try:
+        raw_payload = client.get_quote(symbol=sym, fields="quote,fundamental,reference")
+    except Exception as exc:
+        logger.error("Failed to fetch quote for %s: %s", sym, type(exc).__name__)
+        raise RuntimeError(f"API request failed for symbol {sym}") from exc
 
+    payload = raw_payload.get(sym, raw_payload)
     quote_c = payload.get("quote", {})
     fund_c = payload.get("fundamental", {})
     ref_c = payload.get("reference", {})
@@ -203,427 +233,412 @@ def extract_strict_underlying_data(
     inst_fund_c = {}
     try:
         if hasattr(client, "get_instruments"):
-            inst_payload = client.get_instruments(symbol=clean_sym, projection="fundamental")
+            inst_payload = client.get_instruments(symbol=sym, projection="fundamental")
             inst_list = inst_payload.get("instruments", [])
             if inst_list and isinstance(inst_list, list):
                 inst_fund_c = inst_list[0].get("fundamental", {})
             elif isinstance(inst_payload, dict):
                 inst_fund_c = inst_payload.get("fundamental", {})
     except Exception as exc:
-        logger.info("Instruments query skipped: %s", _sanitize_exc(exc))
+        logger.debug("Instruments query fallback skipped: %s", type(exc).__name__)
 
     def resolve(field: str) -> Any:
-        val = fund_c.get(field)
-        val = inst_fund_c.get(field) if val is None or pd.isna(val) else val
-        return _clean_numeric_val(val)
+        v = fund_c.get(field)
+        return inst_fund_c.get(field) if v is None or pd.isna(v) else v
 
-    # Quote Time ISO Transformation (CLAR-03)
+    # Phase 0 Grounding Close & Spot
+    last_price = _safe_float(quote_c.get("lastPrice"))
+    close_price = _safe_float(quote_c.get("closePrice"))
+
     quote_epoch = quote_c.get("quoteTime")
     quote_iso = None
-    if quote_epoch and not pd.isna(quote_epoch):
+    if quote_epoch and not pd.isna(quote_epoch) and _safe_float(quote_epoch) and float(quote_epoch) > 0:
         try:
-            epoch_val = float(quote_epoch)
-            if epoch_val > 0:
-                quote_iso = (
-                    datetime.fromtimestamp(epoch_val / 1000.0, tz=timezone.utc)
-                    .astimezone(tz)
-                    .isoformat()
-                )
+            quote_iso = datetime.fromtimestamp(float(quote_epoch) / 1000.0, tz=timezone.utc).astimezone(tz).isoformat()
         except Exception as exc:
-            logger.debug("Failed parsing quoteTime epoch %s: %s", quote_epoch, _sanitize_exc(exc))
-            quote_iso = None
+            logger.debug("Failed to parse quote timestamp %s: %s", quote_epoch, type(exc).__name__)
 
-    # REF-05 & PAY-08: Pairwise Relative Margin Consistency Sanity Checks
-    net_margin = resolve("netProfitMarginTTM")
-    op_margin = resolve("operatingMarginTTM")
-    gross_margin = resolve("grossMarginTTM")
+    # Margins and Suspicion Check (PAY-08)
+    net_margin = _safe_float(resolve("netProfitMarginTTM"))
+    op_margin = _safe_float(resolve("operatingMarginTTM"))
+    gross_margin = _safe_float(resolve("grossMarginTTM"))
 
-    margin_suspect = False
-    margin_suspect_reasons: List[str] = []
+    margin_identical = False
+    if net_margin is not None and op_margin is not None:
+        if abs(net_margin - op_margin) < 1e-4:
+            margin_identical = True
 
-    def check_margin_pair(m1: Optional[float], m2: Optional[float], reason_token: str) -> None:
-        nonlocal margin_suspect
-        if m1 is not None and m2 is not None:
-            denom = max(abs(m1), abs(m2), 1e-4)
-            rel_diff = abs(m1 - m2) / denom
-            if rel_diff <= 1e-4:
-                margin_suspect = True
-                margin_suspect_reasons.append(reason_token)
+    # Share Count and ADR Suppression
+    shares_raw = _safe_float(resolve("sharesOutstanding"))
+    shares_state = "CONFIRMED"
+    shares_out = shares_raw
+    if shares_raw is None or shares_raw <= 0.0:
+        shares_out = None
+        shares_state = "UNAVAILABLE_FOR_FOREIGN_ADR"
 
-    check_margin_pair(net_margin, op_margin, "vendor_net_and_operating_margins_identical")
-    check_margin_pair(gross_margin, op_margin, "vendor_gross_and_operating_margins_identical")
-    check_margin_pair(gross_margin, net_margin, "vendor_gross_and_net_margins_identical")
+    # Fundamental Zero Sanitization (PAY-32, PAY-40, PAY-41, PAY-46, PAY-53)
+    # Check balance-sheet denominators:
+    book_value_per_share = _safe_float(resolve("bookValuePerShare"))
+    has_positive_equity = True
+    if book_value_per_share is not None and book_value_per_share <= 0.0:
+        has_positive_equity = False
 
-    # Denominator Sanity & Foreign ADR Suppression
-    raw_shares = resolve("sharesOutstanding")
-    shares_out = None if (raw_shares is not None and raw_shares <= 0.0) else raw_shares
-    shares_state = (
-        "UNAVAILABLE_FOR_FOREIGN_ADR"
-        if (raw_shares is not None and raw_shares <= 0.0)
-        else "VERIFIED"
+    beta_val, beta_st = _sanitize_fundamentals_ratio(fund_c.get("beta"), "beta", net_margin, op_margin)
+    peg_val, peg_st = _sanitize_fundamentals_ratio(fund_c.get("pegRatio"), "pegRatio", net_margin, op_margin)
+    pcf_val, pcf_st = _sanitize_fundamentals_ratio(fund_c.get("pcfRatio"), "pcfRatio", net_margin, op_margin)
+    roe_val, roe_st = _sanitize_fundamentals_ratio(
+        fund_c.get("returnOnEquity"), "returnOnEquity", net_margin, op_margin, denominator_available=has_positive_equity
+    )
+    roa_val, roa_st = _sanitize_fundamentals_ratio(
+        fund_c.get("returnOnAssets"), "returnOnAssets", net_margin, op_margin, denominator_available=True
+    )
+    rev_val, rev_st = _sanitize_fundamentals_ratio(
+        resolve("revChangeYear"), "revChangeYear", net_margin, op_margin
     )
 
-    raw_eps = resolve("eps")
-    clean_eps = None if (raw_eps is not None and abs(raw_eps) < 0.005) else raw_eps
-
-    # REF-01 & ADD-02: Dividend Normalization & Provenance
-    div_yield_raw = resolve("divYield")
-    div_amount = resolve("divAmount")
-    raw_div_freq = resolve("divFreq")
-
-    if raw_div_freq is not None and raw_div_freq in ALLOWED_DIV_FREQS:
-        div_freq = raw_div_freq
-        div_freq_source = "VENDOR"
-    else:
-        div_freq = 4.0
-        div_freq_source = "ASSUMED_QUARTERLY" if raw_div_freq is None else "UNKNOWN"
-
-    spot_ref = _clean_numeric_val(quote_c.get("lastPrice")) or _clean_numeric_val(
-        quote_c.get("closePrice")
-    )
-    normalized_div_yield, div_yield_basis = normalize_dividend_yield(
-        div_yield_raw=div_yield_raw,
-        div_amount=div_amount,
-        div_freq=div_freq,
-        div_freq_source=div_freq_source,
-        spot_ref=spot_ref,
+    # Dividend Processing (REF-01, ADD-02)
+    div_amt = _safe_float(fund_c.get("divAmount"))
+    div_freq_raw = _safe_float(fund_c.get("divFreq"))
+    div_freq_src = "VENDOR" if div_freq_raw is not None and div_freq_raw > 0 else "UNKNOWN"
+    norm_yield, div_basis = normalize_dividend_yield(
+        _safe_float(fund_c.get("divYield")), div_amt, div_freq_raw, div_freq_src, last_price
     )
 
-    # ADD-01: Raw Market Cap Extraction with DEF-09 Handoff
-    market_cap_raw = resolve("marketCap")
-
-    # SAFE-02: Total Debt to Equity Scale Ambiguity Defense
-    raw_dte = resolve("totalDebtToEquity")
-    dte_basis = "VENDOR_RAW_UNVERIFIED" if raw_dte is not None else "UNKNOWN"
-
-    # SAFE-01 & REF-06: Institutional Short Borrow State Envelope
+    # Short Locate Reference (SAFE-01, REF-06)
     is_shortable = ref_c.get("isShortable")
-    is_hard_to_borrow = ref_c.get("isHardToBorrow")
-    htb_rate = _clean_numeric_val(ref_c.get("htbRate"))
+    is_htb = ref_c.get("isHardToBorrow")
+    htb_rate = _safe_float(ref_c.get("htbRate"))
 
-    short_ref_keys = [is_shortable, is_hard_to_borrow, htb_rate]
-    present_short_keys = [k for k in short_ref_keys if k is not None]
-
-    if len(present_short_keys) == 3:
-        short_state = "FULL_PASSTHROUGH"
-    elif len(present_short_keys) > 0:
-        short_state = "PARTIAL_PASSTHROUGH"
-    else:
+    if is_shortable is None and is_htb is None and htb_rate is None:
         short_state = "UNKNOWN"
+        short_reason = "broker_reference_keys_absent"
+    elif is_shortable is not None and is_htb is not None:
+        short_state = "FULL_PASSTHROUGH"
+        short_reason = None
+    else:
+        short_state = "PARTIAL_PASSTHROUGH"
+        short_reason = "broker_reference_keys_partial"
 
-    short_locate_status = {
-        "state": short_state,
-        "isShortable": is_shortable,
-        "isHardToBorrow": is_hard_to_borrow,
-        "htbRate": htb_rate,
-    }
+    # Liquidity Processing (REF-02, PAY-04, PAY-10)
+    vol_10d_raw = _safe_float(fund_c.get("vol10DayAvg"))
+    vol_3m_raw = _safe_float(fund_c.get("vol3MonthAvg"))
+    tot_vol = _safe_float(quote_c.get("totalVolume"))
 
-    # PAY-04 & PAY-10: Volume Averages State Machine & Completeness Checking
-    raw_vol10d = resolve("vol10DayAvg")
-    raw_vol3m = resolve("vol3MonthAvg")
-    total_vol = _clean_numeric_val(quote_c.get("totalVolume"))
+    vol_10d = vol_10d_raw
+    vol_10d_state = "AS_REPORTED"
+    if vol_10d_raw is not None and vol_10d_raw <= 0.0 and tot_vol is not None and tot_vol > 1000.0:
+        vol_10d = None
+        vol_10d_state = "VENDOR_SUSPECT_ZERO"
 
-    vol10d_val = raw_vol10d
-    vol10d_state = "PRESENT" if (raw_vol10d is not None and raw_vol10d > 0.0) else "MISSING"
-    if raw_vol10d is not None and raw_vol10d <= 0.0:
-        if total_vol is not None and total_vol > 1_000_000.0:
-            vol10d_val = None
-            vol10d_state = "VENDOR_SUSPECT_ZERO"
-        else:
-            vol10d_val = 0.0
-            vol10d_state = "ZERO_OBSERVED"
+    vol_3m = vol_3m_raw
+    vol_3m_state = "AS_REPORTED"
+    if vol_3m_raw is not None and vol_3m_raw <= 0.0 and tot_vol is not None and tot_vol > 1000.0:
+        vol_3m = None
+        vol_3m_state = "VENDOR_SUSPECT_ZERO"
 
-    vol3m_val = raw_vol3m
-    vol3m_state = "PRESENT" if (raw_vol3m is not None and raw_vol3m > 0.0) else "MISSING"
-    if raw_vol3m is not None and raw_vol3m <= 0.0:
-        if total_vol is not None and total_vol > 1_000_000.0:
-            vol3m_val = None
-            vol3m_state = "VENDOR_SUSPECT_ZERO"
-        else:
-            vol3m_val = 0.0
-            vol3m_state = "ZERO_OBSERVED"
-
-    # CLAR-01 / PAY-10: Comprehensive 7-Field Liquidity Completeness Enum
     liq_fields = [
-        _clean_numeric_val(quote_c.get("bidPrice")),
-        _clean_numeric_val(quote_c.get("askPrice")),
-        _clean_numeric_val(quote_c.get("bidSize")),
-        _clean_numeric_val(quote_c.get("askSize")),
-        total_vol,
-        vol10d_val,
-        vol3m_val,
+        quote_c.get("bidPrice"), quote_c.get("askPrice"),
+        quote_c.get("bidSize"), quote_c.get("askSize"),
+        tot_vol, vol_10d, vol_3m
     ]
-    present_liq_count = sum(1 for f in liq_fields if f is not None)
-    if present_liq_count == 7:
+    present_count = sum(1 for f in liq_fields if f is not None)
+    if present_count == len(liq_fields):
         liq_state = "FULL_PASSTHROUGH"
-    elif present_liq_count > 0:
+    elif present_count > 0:
         liq_state = "PARTIAL_PASSTHROUGH"
     else:
         liq_state = "UNKNOWN"
 
     return {
         "phase_0_grounding": {
-            "symbol": clean_sym,
-            "lastPrice": _clean_numeric_val(quote_c.get("lastPrice")),
+            "symbol": sym,
+            "lastPrice": last_price,
+            "closePrice": close_price,
             "quoteTime_ISO_ET": quote_iso,
-            "closePrice": _clean_numeric_val(quote_c.get("closePrice")),
         },
         "step_1_fundamentals": {
-            "beta": resolve("beta"),
-            "peRatio": resolve("peRatio"),
-            "pegRatio": resolve("pegRatio"),
-            "pbRatio": resolve("pbRatio"),
-            "prRatio": resolve("prRatio"),
-            "pcfRatio": resolve("pcfRatio"),
-            "quickRatio": resolve("quickRatio"),
-            "currentRatio": resolve("currentRatio"),
-            "totalDebtToEquity": raw_dte,
-            "totalDebtToEquity_basis": dte_basis,
-            "totalDebtToEquity_scale_risk": True if raw_dte is not None else False,
+            "beta": beta_val,
+            "beta_state": beta_st,
+            "peRatio": _safe_float(fund_c.get("peRatio")),
+            "pegRatio": peg_val,
+            "pegRatio_state": peg_st,
+            "pbRatio": _safe_float(fund_c.get("pbRatio")),
+            "prRatio": _safe_float(fund_c.get("prRatio")),
+            "pcfRatio": pcf_val,
+            "pcfRatio_state": pcf_st,
+            "quickRatio": _safe_float(fund_c.get("quickRatio")),
+            "currentRatio": _safe_float(fund_c.get("currentRatio")),
+            "totalDebtToEquity": _safe_float(fund_c.get("totalDebtToEquity")),
+            "totalDebtToEquity_basis": "VENDOR_RAW_UNVERIFIED",
             "grossMarginTTM": gross_margin,
             "netProfitMarginTTM": net_margin,
             "operatingMarginTTM": op_margin,
-            "margin_fields_suspect": margin_suspect,
-            "margin_fields_suspect_reason": (
-                "; ".join(margin_suspect_reasons) if margin_suspect else None
-            ),
-            "returnOnEquity": resolve("returnOnEquity"),
-            "returnOnAssets": resolve("returnOnAssets"),
-            "eps": clean_eps,
-            "revChangeYear": resolve("revChangeYear"),
-            "divYield": normalized_div_yield,
-            "divYield_raw": div_yield_raw,
-            "divYield_basis": div_yield_basis,
-            "divAmount": div_amount,
-            "divFreq": resolve("divFreq"),
-            "div_freq_source": div_freq_source,
+            "margin_fields_suspect": margin_identical,
+            "margin_fields_suspect_reason": "vendor_net_and_operating_margins_identical" if margin_identical else None,
+            "returnOnEquity": roe_val,
+            "returnOnEquity_state": roe_st,
+            "returnOnAssets": roa_val,
+            "returnOnAssets_state": roa_st,
+            "eps": _safe_float(fund_c.get("eps")),
+            "revChangeYear": rev_val,
+            "revChangeYear_state": rev_st,
+            "divYield": norm_yield,
+            "divYield_basis": div_basis,
+            "divYield_raw": _safe_float(fund_c.get("divYield")),
+            "divAmount": div_amt,
+            "divFreq": div_freq_raw,
+            "div_freq_source": div_freq_src,
             "divDate": fund_c.get("divDate"),
-            "marketCap": market_cap_raw,
-            "marketCap_unit": "VENDOR_RAW_UNVERIFIED",
             "sharesOutstanding": shares_out,
             "shares_outstanding_state": shares_state,
-            "sharesFloat": resolve("sharesFloat"),
+            "sharesFloat": _safe_float(resolve("sharesFloat")),
+            "marketCap": _safe_float(fund_c.get("marketCap")),
+            "marketCap_unit": "VENDOR_RAW_UNVERIFIED",
         },
-        "step_3_short_reference": short_locate_status,
+        "step_3_short_reference": {
+            "state": short_state,
+            "reason": short_reason,
+            "isShortable": is_shortable,
+            "isHardToBorrow": is_htb,
+            "htbRate": htb_rate,
+        },
         "step_8_liquidity_sizing": {
             "state": liq_state,
-            "bidPrice": liq_fields[0],
-            "askPrice": liq_fields[1],
-            "bidSize": liq_fields[2],
-            "askSize": liq_fields[3],
-            "totalVolume": liq_fields[4],
-            "vol10DayAvg": vol10d_val,
-            "vol10DayAvg_state": vol10d_state,
-            "vol3MonthAvg": vol3m_val,
-            "vol3MonthAvg_state": vol3m_state,
+            "bidPrice": _safe_float(quote_c.get("bidPrice")),
+            "askPrice": _safe_float(quote_c.get("askPrice")),
+            "bidSize": _safe_float(quote_c.get("bidSize")),
+            "askSize": _safe_float(quote_c.get("askSize")),
+            "totalVolume": tot_vol,
+            "vol10DayAvg": vol_10d,
+            "vol10DayAvg_state": vol_10d_state,
+            "vol3MonthAvg": vol_3m,
+            "vol3MonthAvg_state": vol_3m_state,
         },
     }
 
 
 def extract_in_memory_price_history(
-    client: SchwabClient, symbol: str, config: Optional[Dict[str, Any]] = None
+    client: SchwabClient, symbol: str, hist_cfg: Dict[str, Any]
 ) -> List[Dict[str, Any]]:
-    """Extracts historical candles into memory with guaranteed monotonic sort and future pruning."""
-    clean_sym = sanitize_and_validate_symbols(symbol)
-    cfg = config or {}
+    """Pulls OHLCV history cleanly in-memory."""
+    sym = sanitize_and_validate_symbols(symbol)
     try:
         raw = client.get_price_history(
-            symbol=clean_sym,
-            period_type=cfg.get("HISTORICAL_PERIOD_TYPE", "year"),
-            period=cfg.get("HISTORICAL_PERIOD", 1),
-            frequency_type=cfg.get("HISTORICAL_FREQUENCY_TYPE", "daily"),
-            frequency=cfg.get("HISTORICAL_FREQUENCY", 1),
-            need_extended_hours=cfg.get("HISTORICAL_NEED_EXTENDED_HOURS", False),
+            symbol=sym,
+            period_type=hist_cfg.get("HISTORICAL_PERIOD_TYPE", "year"),
+            period=hist_cfg.get("HISTORICAL_PERIOD", 1),
+            frequency_type=hist_cfg.get("HISTORICAL_FREQUENCY_TYPE", "daily"),
+            frequency=hist_cfg.get("HISTORICAL_FREQUENCY", 1),
+            need_extended_hours=hist_cfg.get("HISTORICAL_NEED_EXTENDED_HOURS", False),
         )
-        try:
-            df = parse_price_history_to_df(raw)
-        except Exception:
-            df = pd.DataFrame(raw.get("candles", []))
-            for col in ["open", "high", "low", "close", "volume"]:
-                if col in df.columns:
-                    if df[col].dtype == object:
-                        df[col] = (
-                            df[col]
-                            .astype(str)
-                            .str.replace("$", "", regex=False)
-                            .str.replace(",", "", regex=False)
-                            .str.strip()
-                        )
-                    df[col] = pd.to_numeric(df[col], errors="coerce")
-
-        if df.empty:
-            return []
-
-        time_cols = [c for c in ["datetime", "epoch", "time", "date"] if c in df.columns]
-        if time_cols:
-            t_col = time_cols[0]
-            df[t_col] = pd.to_numeric(df[t_col], errors="coerce")
-            df = df.dropna(subset=[t_col]).sort_values(by=t_col, ascending=True)
-            df = df.drop_duplicates(subset=[t_col], keep="last")
-
-            now_ms = datetime.now(timezone.utc).timestamp() * 1000.0
-            df = df[df[t_col] <= (now_ms + 86400000.0)]
-
-        cols = ["datetime", "open", "high", "low", "close", "volume"]
-        existing = [c for c in cols if c in df.columns]
-        return df[existing].dropna(subset=["high", "low", "close"]).to_dict(orient="records")
+        candles = raw.get("candles", []) if isinstance(raw, dict) else []
+        return candles
     except Exception as exc:
-        logger.error("PriceHistory extraction failed: %s", _sanitize_exc(exc))
+        logger.error("PriceHistory fetch failed for %s: %s", sym, type(exc).__name__)
         return []
 
 
 def extract_in_memory_option_expirations(
     client: SchwabClient, symbol: str
 ) -> List[Dict[str, Any]]:
-    """Retrieves full expiration calendar with monotonic DTE ordering."""
-    clean_sym = sanitize_and_validate_symbols(symbol)
+    """Retrieves full expiration calendar with secondary deterministic sort."""
+    sym = sanitize_and_validate_symbols(symbol)
     try:
-        payload = client.get_option_expirations(clean_sym)
+        payload = client.get_option_expirations(sym)
         exp_list = payload.get("expirationList", [])
         if not exp_list:
             return []
         df = pd.DataFrame(exp_list)
-        cols = ["expirationDate", "daysToExpiration"]
-        existing = [c for c in cols if c in df.columns]
-        return df[existing].sort_values("daysToExpiration").to_dict(orient="records")
+        if "daysToExpiration" in df.columns and "expirationDate" in df.columns:
+            df = df.sort_values(by=["daysToExpiration", "expirationDate"], ascending=[True, True])
+            return df.to_dict(orient="records")
+        return exp_list
     except Exception as exc:
-        logger.error("OptionExpirations query failed: %s", _sanitize_exc(exc))
+        logger.error("OptionExpirations query failed for %s: %s", sym, type(exc).__name__)
         return []
 
 
 def resolve_optimal_expirations(
-    expirations: List[Dict[str, Any]], prefer_longer_tenor: bool = False
-) -> List[str]:
+    expirations_list: List[Dict[str, Any]]
+) -> Dict[str, Any]:
     """
-    Selects front-month and ~30 DTE tenors deterministically (OPT-02).
-    Tie-breaks on equidistant DTE using ISO date strings, with parameterized policy support.
+    Implements PAY-24 / PAY-35 / PAY-47 3-tenor bracketing engine:
+      1. Front tenor (DTE >= 4) with skip telemetry (DTE_BELOW_MINIMUM_4).
+      2. Near-Sub tenor (DTE <= 30).
+      3. Near-Sup tenor (DTE > 30).
     """
-    if not expirations:
-        return []
-    valid_exps = [e for e in expirations if e.get("daysToExpiration", 0) > 0]
-    if not valid_exps:
-        valid_exps = expirations
+    if not expirations_list:
+        return {
+            "target_expirations": [],
+            "front_tenor_selection": {
+                "selected_dte": None,
+                "skipped_expirations_count": 0,
+                "skipped_expirations": [],
+            },
+            "near_30_sub": None,
+            "near_30_sup": None,
+        }
 
-    front_exp = min(valid_exps, key=lambda x: x["daysToExpiration"])["expirationDate"]
+    skipped_expirations: List[Dict[str, Any]] = []
+    eligible_expirations: List[Dict[str, Any]] = []
 
-    def thirty_dte_key(x: Dict[str, Any]) -> Tuple[int, int, str]:
-        diff = abs(x["daysToExpiration"] - 30)
-        tenor_penalty = -1 if (prefer_longer_tenor and x["daysToExpiration"] >= 30) else 0
-        return (diff, tenor_penalty, str(x.get("expirationDate", "")))
+    for exp in expirations_list:
+        dte = exp.get("daysToExpiration")
+        if dte is not None and isinstance(dte, (int, float)):
+            dte_val = int(dte)
+            if dte_val < 4:
+                skipped_expirations.append({"dte": dte_val, "reason": REASON_DTE_BELOW_MINIMUM_4})
+            else:
+                eligible_expirations.append(exp)
 
-    thirty_dte_exp = min(valid_exps, key=thirty_dte_key)["expirationDate"]
-    return sorted(list({front_exp, thirty_dte_exp}))
+    if not eligible_expirations:
+        return {
+            "target_expirations": [],
+            "front_tenor_selection": {
+                "selected_dte": None,
+                "skipped_expirations_count": len(skipped_expirations),
+                "skipped_expirations": skipped_expirations,
+            },
+            "near_30_sub": None,
+            "near_30_sup": None,
+        }
+
+    # 1. Front tenor: lowest DTE >= 4
+    front_exp = eligible_expirations[0]
+    front_date = front_exp["expirationDate"]
+
+    # 2. Near-Sub tenor: max DTE <= 30
+    sub_candidates = [e for e in eligible_expirations if e["daysToExpiration"] <= 30]
+    near_sub_exp = max(sub_candidates, key=lambda x: x["daysToExpiration"]) if sub_candidates else None
+
+    # 3. Near-Sup tenor: min DTE > 30
+    sup_candidates = [e for e in eligible_expirations if e["daysToExpiration"] > 30]
+    near_sup_exp = min(sup_candidates, key=lambda x: x["daysToExpiration"]) if sup_candidates else None
+
+    # Assembly
+    target_dates: List[str] = [front_date]
+    if near_sub_exp and near_sub_exp["expirationDate"] not in target_dates:
+        target_dates.append(near_sub_exp["expirationDate"])
+    if near_sup_exp and near_sup_exp["expirationDate"] not in target_dates:
+        target_dates.append(near_sup_exp["expirationDate"])
+
+    return {
+        "target_expirations": target_dates,
+        "front_tenor_selection": {
+            "selected_dte": front_exp["daysToExpiration"],
+            "skipped_expirations_count": len(skipped_expirations),
+            "skipped_expirations": skipped_expirations,
+        },
+        "near_30_sub": near_sub_exp,
+        "near_30_sup": near_sup_exp,
+    }
 
 
 def extract_in_memory_option_chains(
     client: SchwabClient,
     symbol: str,
-    target_expirations: List[str],
+    target_expirations: Any,
     strike_count: int = 14,
     strategy: str = "SINGLE",
-    include_quote: bool = True,
+    include_underlying_quote: bool = True,
 ) -> Tuple[Optional[float], Optional[float], List[Dict[str, Any]], Dict[str, int]]:
     """
-    Extracts raw chain volatility metadata, contemporaneous spot price, option contracts, and rejection telemetry.
+    Extracts options chains, tracking rejection counters and isolating vendor metadata.
+    Returns: (vendor_raw_chain_volatility_metadata, spot_price, records, telemetry)
     """
-    clean_sym = sanitize_and_validate_symbols(symbol)
-    raw_chain_iv: Optional[float] = None
-    underlying_price: Optional[float] = None
-    records: List[Dict[str, Any]] = []
-
-    telemetry = {
-        "rejected_negative_mark_count": 0,
+    sym = sanitize_and_validate_symbols(symbol)
+    rejection_counters = {
         "rejected_zero_strike_count": 0,
         "rejected_expired_contract_count": 0,
-        "rejected_negative_spread_count": 0,
+        "rejected_negative_mark_count": 0,
+        "rejected_negative_price_count": 0,
     }
 
-    if not target_expirations:
-        return None, None, [], telemetry
+    target_dates: Optional[List[str]] = None
+    if isinstance(target_expirations, dict):
+        target_dates = target_expirations.get("target_expirations")
+    elif isinstance(target_expirations, list):
+        target_dates = target_expirations
+
+    from_date = target_dates[0] if target_dates else None
+    to_date = target_dates[-1] if target_dates else None
 
     try:
-        for exp_date in target_expirations:
-            raw_chain = client.get_option_chain(
-                symbol=clean_sym,
-                contract_type="ALL",
-                strike_count=strike_count,
-                include_underlying_quote=include_quote,
-                strategy=strategy,
-                from_date=exp_date,
-                to_date=exp_date,
-            )
-
-            if raw_chain_iv is None:
-                raw_chain_iv = _clean_numeric_val(raw_chain.get("volatility"))
-
-            if underlying_price is None:
-                underlying_price = _clean_numeric_val(
-                    raw_chain.get("underlyingPrice")
-                    or raw_chain.get("underlying", {}).get("last")
-                    or raw_chain.get("underlying", {}).get("mark")
-                )
-                if underlying_price is not None and underlying_price <= 0.0:
-                    underlying_price = None
-
-            def parse_map(exp_map: Dict[str, Any], flag: str):
-                if not isinstance(exp_map, dict):
-                    return
-                for exp_key, strike_map in exp_map.items():
-                    dte = None
-                    if ":" in exp_key:
-                        parts = exp_key.split(":")
-                        if len(parts) >= 2 and parts[1].isdigit():
-                            dte = int(parts[1])
-
-                    if not isinstance(strike_map, dict):
-                        continue
-                    for _, contracts in strike_map.items():
-                        if not isinstance(contracts, list):
-                            continue
-                        for c in contracts:
-                            strike = _clean_numeric_val(c.get("strikePrice"))
-                            contract_dte = c.get("daysToExpiration", dte)
-
-                            # Rejection Filter: Zero/Negative Strike
-                            if strike is None or strike <= 0.0:
-                                telemetry["rejected_zero_strike_count"] += 1
-                                continue
-
-                            # Rejection Filter: Expired Contracts
-                            if contract_dte is not None and contract_dte <= 0:
-                                telemetry["rejected_expired_contract_count"] += 1
-                                continue
-
-                            bid = _clean_numeric_val(c.get("bid"))
-                            ask = _clean_numeric_val(c.get("ask"))
-                            mark = _clean_numeric_val(c.get("mark"))
-
-                            # REF-03: Negative Quote & Mark Guards
-                            if mark is not None and mark < 0.0:
-                                telemetry["rejected_negative_mark_count"] += 1
-                                continue
-
-                            if (bid is not None and bid < 0.0) or (ask is not None and ask < 0.0):
-                                telemetry["rejected_negative_spread_count"] += 1
-                                continue
-
-                            records.append({
-                                "putCallIndicator": c.get("putCallIndicator", flag),
-                                "daysToExpiration": contract_dte,
-                                "strikePrice": strike,
-                                "bid": bid,
-                                "ask": ask,
-                                "mark": mark,
-                                "totalVolume": _clean_numeric_val(c.get("totalVolume")),
-                                "openInterest": _clean_numeric_val(c.get("openInterest")),
-                                "volatility": _clean_numeric_val(c.get("volatility")),
-                                "delta": _clean_numeric_val(c.get("delta")),
-                            })
-
-            parse_map(raw_chain.get("callExpDateMap", {}), "CALL")
-            parse_map(raw_chain.get("putExpDateMap", {}), "PUT")
-
+        raw_chain = client.get_option_chain(
+            symbol=sym,
+            contract_type="ALL",
+            strike_count=strike_count,
+            include_underlying_quote=include_underlying_quote,
+            strategy=strategy,
+            from_date=from_date,
+            to_date=to_date,
+        )
     except Exception as exc:
-        logger.error("OptionChains extraction failed: %s", _sanitize_exc(exc))
+        logger.error("OptionChains extraction failed for %s: %s", sym, type(exc).__name__)
+        return None, None, [], rejection_counters
 
-    return raw_chain_iv, underlying_price, records, telemetry
+    vendor_raw_iv = _safe_float(raw_chain.get("volatility"))
+    underlying_price = _safe_float(raw_chain.get("underlyingPrice"))
+    records: List[Dict[str, Any]] = []
+
+    def parse_side(exp_map: Dict[str, Any], default_indicator: str):
+        if not isinstance(exp_map, dict):
+            return
+        for exp_key, strike_map in exp_map.items():
+            parts = exp_key.split(":")
+            exp_date = parts[0]
+            dte = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
+
+            if target_dates and exp_date not in target_dates:
+                continue
+            if not isinstance(strike_map, dict):
+                continue
+
+            for _, contracts in strike_map.items():
+                if not isinstance(contracts, list):
+                    continue
+                for c in contracts:
+                    strike = _safe_float(c.get("strikePrice"))
+                    contract_dte = c.get("daysToExpiration", dte)
+                    mark = _safe_float(c.get("mark"))
+                    bid = _safe_float(c.get("bid"))
+                    ask = _safe_float(c.get("ask"))
+
+                    # Non-negative & integrity guards (REF-03, ADD-03)
+                    if strike is None or strike <= 0.0:
+                        rejection_counters["rejected_zero_strike_count"] += 1
+                        continue
+                    if contract_dte is not None and contract_dte <= 0:
+                        rejection_counters["rejected_expired_contract_count"] += 1
+                        continue
+                    if mark is not None and mark < 0.0:
+                        rejection_counters["rejected_negative_mark_count"] += 1
+                        continue
+                    if (bid is not None and bid < 0.0) or (ask is not None and ask < 0.0):
+                        rejection_counters["rejected_negative_price_count"] += 1
+                        continue
+
+                    records.append({
+                        "putCallIndicator": c.get("putCallIndicator", default_indicator),
+                        "daysToExpiration": contract_dte,
+                        "expirationDate": exp_date,
+                        "strikePrice": strike,
+                        "bid": bid,
+                        "ask": ask,
+                        "mark": mark,
+                        "totalVolume": _safe_float(c.get("totalVolume")),
+                        "openInterest": _safe_float(c.get("openInterest")),
+                        "volatility": _safe_float(c.get("volatility")),
+                        "delta": _safe_float(c.get("delta")),
+                        "gamma": _safe_float(c.get("gamma")),
+                        "theta": _safe_float(c.get("theta")),
+                        "vega": _safe_float(c.get("vega")),
+                        "rho": _safe_float(c.get("rho")),
+                        "inTheMoney": c.get("inTheMoney"),
+                        "contractId": c.get("symbol", c.get("contractId")),
+                    })
+
+    parse_side(raw_chain.get("callExpDateMap", {}), "CALL")
+    parse_side(raw_chain.get("putExpDateMap", {}), "PUT")
+
+    return vendor_raw_iv, underlying_price, records, rejection_counters
