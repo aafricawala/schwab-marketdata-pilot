@@ -4,13 +4,12 @@ schwab_serializer.py
 Institutional Charles Schwab JSON Sanitization & NumPy Primitives Serializer
 Protocol v16.21 Production Certified
 ========================================================================================
-Changelog v16.21:
-  - Restored export_compact_json() signature and return contract: (Path, Dict[str, Any]).
-  - PAY-60: Preserved PRESERVE_NULL_CONTAINERS whitelist for 'market_cap_divergence'.
-  - Defensively handles NumPy scalar primitives (np.int64, np.float64, np.bool_)
-    and composite pandas containers before scalar null checks.
-  - Enforces currency formatting across quote parameters while preserving raw floats
+Changelog v16.21 (Round-Twenty Spec Lock):
+  - PRESERVE_NULL_CONTAINERS whitelist prevents null-stripping on market_cap_divergence.
+  - Recursively converts NumPy scalars and Pandas frames before scalar guards.
+  - Retains currency formatting for quote displays while preserving raw floats
     under EXCLUDED_FORMAT_PREFIXES = ("calculated_metrics",).
+  - Pinned export_compact_json() signature to Tuple[Path, Dict[str, Any]].
 ========================================================================================
 """
 
@@ -43,7 +42,7 @@ def sanitize_payload_for_serialization(
     obj: Any, key_name: str = "", current_path: str = ""
 ) -> Any:
     """Formats raw quote displays while enforcing raw float primitives inside calculation blocks."""
-    # 1. Containers first to avoid truth-value ambiguity on arrays
+    # 1. Containers first to avoid truth-value ambiguity
     if isinstance(obj, (pd.DataFrame, pd.Series)):
         return sanitize_payload_for_serialization(obj.to_dict(), key_name=key_name, current_path=current_path)
 
@@ -127,7 +126,7 @@ def export_compact_json(
         cleaned_data,
         indent=2,
         ensure_ascii=False,
-        default=str
+        default=str,
     )
 
     path.parent.mkdir(parents=True, exist_ok=True)

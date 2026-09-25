@@ -4,14 +4,14 @@ schwab_marketdata_calculator.py
 Institutional Charles Schwab Quantitative Metrics & Surface Modeling Engine
 Protocol v16.21 Production Certified
 ========================================================================================
-Changelog v16.21 (Round-Eighteen Recovery):
-  - PAY-57/74: Guarded payout ratio divisor against suppressed/zero EPS stubs.
+Changelog v16.21 (Round-Twenty Spec Lock):
+  - PAY-57/74: Protected dividend payout ratio divisor against suppressed/zero EPS stubs.
   - PAY-60: Enforced uniform 6-key canonical null dictionary for market_cap_divergence.
-  - PAY-61: Activated Tier 4 INTEGRITY_FAILURE_REQUIRES_REVIEW and structural sweep.
+  - PAY-61/70: Trinary branching logic for market_cap_divergence_reason.
   - PAY-62: Preserved signed negative float put delta convention.
-  - PAY-64: Gated non-payers to NOT_APPLICABLE_NON_PAYER with N/A state.
+  - PAY-64: Non-payer dividend routed to NOT_APPLICABLE_NON_PAYER with N/A state.
   - PAY-65: Emitted skew_delta_symmetry_gap telemetry.
-  - PAY-72: Handled CFO yield scale-invariance when pcfRatio > 0.
+  - Structural Integrity sweep for divergence >20% and >$50B.
 ========================================================================================
 """
 
@@ -38,7 +38,7 @@ MARKET_CAP_DEPENDENT_METRICS: Set[str] = {
 
 
 def safe_float(val: Any) -> Optional[float]:
-    """Safely converts input primitives to float, handling currency and strings."""
+    """Safely converts input primitives to float, handling currency and strings cleanly."""
     if val is None or pd.isna(val):
         return None
     if isinstance(val, (int, float)):
@@ -172,7 +172,7 @@ class MasterThesisCalculator:
         reported_mcap = safe_float(fund.get("marketCap"))
         total_dte = safe_float(fund.get("totalDebtToEquity"))
 
-        # 1. Market Cap Derivation & Divergence (PAY-60 / PAY-61)
+        # 1. Market Cap Derivation & Trinary Divergence Reasons (PAY-60 / PAY-61 / PAY-70)
         derived_mcap = None
         if self.grounding_spot is not None and shares is not None and shares > 0:
             derived_mcap = round(self.grounding_spot * shares, 2)
@@ -196,9 +196,15 @@ class MasterThesisCalculator:
                 div_state = "SCHEMA_OR_CLASS_SUSPECTED"
         else:
             div_state = "UNVERIFIED_COMPONENTS"
-            div_reason = "requires_verified_shares_outstanding" if shares is None else "missing_reported_market_cap"
+            if shares is None:
+                div_reason = "requires_verified_shares_outstanding"
+            elif reported_mcap is None:
+                div_reason = "vendor_does_not_provide_market_cap"
+            elif derived_mcap is None:
+                div_reason = "derived_market_cap_unavailable"
+            else:
+                div_reason = None
 
-        # Canonical Uniform 6-Key Divergence Block (PAY-60)
         market_cap_divergence_block = {
             "derived_market_cap": derived_mcap,
             "reported_market_cap": reported_mcap,
@@ -226,14 +232,12 @@ class MasterThesisCalculator:
         payout_exceeds = False
 
         if annual_div == 0.0 or fund.get("divYield") == 0.0:
-            # PAY-64 Non-payer handling
             payout_val = {"state": "N/A", "reason": "non_payer_no_distribution"}
             payout_health = "NOT_APPLICABLE_NON_PAYER"
         elif eps_state in (
             "VENDOR_UNAVAILABLE_EPS_ZERO_WITH_POSITIVE_MARGIN",
             "VENDOR_UNAVAILABLE_FOREIGN_ADR_SUPPRESSED",
         ):
-            # PAY-57 / PAY-74 Protected Divisor
             payout_val = {"state": "N/A", "reason": "eps_suppressed_with_positive_net_margin"}
             payout_health = "CAPITAL_STRUCTURE_UNVERIFIED"
         elif eps is None or eps <= 0:
@@ -271,7 +275,7 @@ class MasterThesisCalculator:
             "market_cap_divergence_state": div_state,
         }
 
-        # PAY-49 / PAY-55 / PAY-61: Structural Integrity Sweep
+        # Structural Sweep on Integrity Failure (PAY-49 / PAY-55 / PAY-61)
         if div_state == "INTEGRITY_FAILURE_REQUIRES_REVIEW":
             for field in MARKET_CAP_DEPENDENT_METRICS:
                 metrics[field] = {
@@ -387,7 +391,7 @@ class MasterThesisCalculator:
 
         put_iv = safe_float(p_row.get("volatility"))
         call_iv = safe_float(c_row.get("volatility"))
-        put_delta = safe_float(p_row.get("delta"))  # Signed delta (PAY-62)
+        put_delta = safe_float(p_row.get("delta"))
         call_delta = safe_float(c_row.get("delta"))
 
         if put_iv is None or call_iv is None or put_delta is None or call_delta is None:
@@ -395,7 +399,7 @@ class MasterThesisCalculator:
 
         diff = round(put_iv - call_iv, 3)
         ratio = round(put_iv / call_iv, 4)
-        sym_gap = round(abs(abs(put_delta) - abs(call_delta)), 4)  # PAY-65
+        sym_gap = round(abs(abs(put_delta) - abs(call_delta)), 4)
 
         in_band = (0.20 <= abs(put_delta) <= 0.30) and (0.20 <= abs(call_delta) <= 0.30)
 
