@@ -10,7 +10,7 @@ def safe_float(v: Any) -> Optional[float]:
     try:
         f = float(str(v).replace("$", "").replace(",", "").strip())
         if math.isnan(f) or math.isinf(f): return None
-        return 0.0 if f == 0.0 else f
+        return 0.0 if (f == 0.0 or abs(f) < 1e-12) else f
     except (ValueError, TypeError): return None
 
 def safe_div(n: Any, d: Any) -> Optional[float]:
@@ -111,7 +111,7 @@ class MasterThesisCalculator:
         calc: Dict[str, Any] = {"market_cap_divergence": mcap_div}
 
         spot_near_zero = (self.calc_spot is not None and self.calc_spot <= 0.01)
-        eps_non_pos = (eps is None or eps <= 0.0)
+        eps_non_pos = (eps is None or eps <= 0.0 or abs(eps) < 0.01)
 
         if is_halted:
             calc["earnings_yield_state"] = "N/A"
@@ -119,11 +119,16 @@ class MasterThesisCalculator:
         elif is_etn:
             calc["earnings_yield_state"] = "N/A"
             calc["earnings_yield_reason"] = "earnings_negative_or_unstable_pe_ratio_non_positive"
+        elif spot_near_zero:
+            calc["earnings_yield_state"] = "N/A"
+            calc["earnings_yield_reason"] = "spot_price_near_zero_or_negative_earnings"
         elif pe and pe > 0:
             if eps_non_pos:
                 calc["earnings_yield_state"] = "N/A"
                 if eps is not None and eps < 0.0:
                     calc["earnings_yield_reason"] = "pe_ratio_positive_while_trailing_eps_negative_unreconciled"
+                elif eps is not None and 0.0 < eps < 0.01:
+                    calc["earnings_yield_reason"] = "pe_ratio_unsupported_by_sub_cent_reported_eps"
                 else:
                     calc["earnings_yield_reason"] = "pe_ratio_unsupported_by_non_positive_reported_eps"
             elif self.calc_spot and ((pe * eps / self.calc_spot > 100.0) or (self.calc_spot / (pe * eps) > 100.0)):
@@ -132,7 +137,7 @@ class MasterThesisCalculator:
             else:
                 calc["earnings_yield_pct"] = round(safe_div(100.0, pe) or 0.0, 4)
                 calc["earnings_yield_state"] = "CALCULATED"
-        elif eps and eps > 0 and self.calc_spot and not spot_near_zero:
+        elif eps and eps >= 0.01 and self.calc_spot:
             calc["earnings_yield_pct"] = round(safe_div(eps * 100.0, self.calc_spot) or 0.0, 4)
             calc["earnings_yield_state"] = "CALCULATED"
         else:
@@ -418,12 +423,15 @@ class MasterThesisCalculator:
                 h, l, c = safe_float(last_bar["high"]), safe_float(last_bar["low"]), safe_float(last_bar["close"])
                 if h is not None and l is not None and c is not None and h > 0 and l > 0 and c > 0:
                     p = (h + l + c) / 3.0
-                    pivots = {
-                        "Pivot": round(p, 2),
-                        "R1": round((2 * p) - l, 2), "R2": round(p + (h - l), 2), "R3": round(p + 2 * (h - l), 2),
-                        "S1": round((2 * p) - h, 2), "S2": round(p - (h - l), 2), "S3": round(p - 2 * (h - l), 2),
-                        "state": "CALCULATED"
-                    }
+                    if p >= 0.005:
+                        pivots = {
+                            "Pivot": round(p, 2),
+                            "R1": round((2 * p) - l, 2), "R2": round(p + (h - l), 2), "R3": round(p + 2 * (h - l), 2),
+                            "S1": round((2 * p) - h, 2), "S2": round(p - (h - l), 2), "S3": round(p - 2 * (h - l), 2),
+                            "state": "CALCULATED"
+                        }
+                    else:
+                        pivots = {"state": "UNKNOWN", "reason": "candle_prices_non_positive"}
                 else:
                     pivots = {"state": "UNKNOWN", "reason": "candle_prices_non_positive"}
                 rv = self._calc_realized_vol_suite(clean_bars)

@@ -7,13 +7,14 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 ALLOWED_DIV_FREQS = {1.0, 2.0, 4.0, 12.0}
+KNOWN_FOREIGN_PRIVATE_ISSUERS = {"ZIM"}
 
 def safe_float(v: Any) -> Optional[float]:
     if v is None or pd.isna(v): return None
     try:
         f = float(str(v).replace("$", "").replace(",", "").strip())
         if math.isnan(f) or math.isinf(f): return None
-        return 0.0 if f == 0.0 else f
+        return 0.0 if (f == 0.0 or abs(f) < 1e-12) else f
     except (ValueError, TypeError): return None
 
 def extract_market_open_status(client: Any, *args: Any, **kwargs: Any) -> Optional[bool]:
@@ -55,8 +56,8 @@ def extract_strict_underlying_data(client: Any, symbol: str, tz: Optional[ZoneIn
     asset_type = str(ref.get("assetType") or quote.get("assetType") or "").upper()
     description = str(ref.get("description") or quote.get("description") or "").upper()
     is_adr = bool(ref.get("isAdr") or asset_type == "ADR" or "ADR" in description)
-    country = str(ref.get("country") or quote.get("country") or "").upper()
-    is_foreign = is_adr or (bool(country) and country not in {"US", "USA"})
+    country = str(ref.get("country") or quote.get("country") or fund.get("country") or "").upper()
+    is_foreign = is_adr or (bool(country) and country not in {"US", "USA"}) or (clean_sym in KNOWN_FOREIGN_PRIVATE_ISSUERS)
 
     raw_shares = safe_float(fund.get("sharesOutstanding"))
     raw_pe = safe_float(fund.get("peRatio"))

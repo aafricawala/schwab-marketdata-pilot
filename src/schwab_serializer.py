@@ -46,7 +46,11 @@ def sanitize_payload_for_serialization(obj: Any, key_name: str = "", current_pat
             return None
         if not in_excluded_scope and key_name in CURRENCY_KEYS:
             return f"${float(obj):,.2f}"
-        return float(obj) if in_excluded_scope else round(float(obj), 2)
+        if in_excluded_scope:
+            flt_val = float(obj)
+            return 0.0 if (flt_val == 0.0 or abs(flt_val) < 1e-12) else flt_val
+        v = round(float(obj), 2)
+        return 0.0 if (v == 0.0 or abs(v) < 1e-12) else v
 
     if isinstance(obj, (np.integer, int)) and not isinstance(obj, (bool, np.bool_)):
         if not in_excluded_scope and key_name in CURRENCY_KEYS:
