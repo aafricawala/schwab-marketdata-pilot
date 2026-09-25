@@ -1,365 +1,410 @@
 # src/schwab_raw_marketdata.py
 from __future__ import annotations
-import math, re
+import math
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 import pandas as pd
 
-ALLOWED_DIV_FREQS = {1.0, 2.0, 4.0, 12.0}
-KNOWN_FOREIGN_PRIVATE_ISSUERS = {"ZIM"}
-
 def safe_float(v: Any) -> Optional[float]:
-    if v is None or pd.isna(v): return None
+    if v is None or pd.isna(v):
+        return None
     try:
         f = float(str(v).replace("$", "").replace(",", "").strip())
-        if math.isnan(f) or math.isinf(f): return None
+        if math.isnan(f) or math.isinf(f):
+            return None
         return 0.0 if (f == 0.0 or abs(f) < 1e-12) else f
-    except (ValueError, TypeError): return None
+    except (ValueError, TypeError):
+        return None
 
-def extract_market_open_status(client: Any, *args: Any, **kwargs: Any) -> Optional[bool]:
-    try:
-        if hasattr(client, "get_market_hours"):
-            h = client.get_market_hours("equity")
-            if isinstance(h, dict):
-                if "isOpen" in h: return bool(h.get("isOpen", False))
-                eq = h.get("equity", {}).get("EQ", {})
-                if "isOpen" in eq: return bool(eq.get("isOpen", False))
-    except Exception: pass
+def safe_div(n: Any, d: Any) -> Optional[float]:
+    fn, fd = safe_float(n), safe_float(d)
+    if fn is None or fd is None or fd == 0.0:
+        return None
+    res = fn / fd
+    return None if math.isnan(res) or math.isinf(res) else res
+
+def _parse_client_response(resp: Any) -> Optional[Dict[str, Any]]:
+    if resp is None:
+        return None
+    if isinstance(resp, dict):
+        return resp
+    if hasattr(resp, "status_code"):
+        if resp.status_code == 200:
+            try:
+                return resp.json()
+            except Exception:
+                return None
+        return None
     return None
 
-def resolve_optimal_expirations(exp_records: List[Dict[str, Any]]) -> List[str]:
-    if not exp_records: return []
-    valid = [r for r in exp_records if safe_float(r.get("daysToExpiration", -1)) is not None and safe_float(r.get("daysToExpiration")) >= 4]
-    if not valid: return []
-    s = sorted(valid, key=lambda x: safe_float(x.get("daysToExpiration", 9999)))
-    f = s[0].get("expirationDate")
-    le30 = [r for r in s if safe_float(r.get("daysToExpiration")) <= 30]
-    ge30 = [r for r in s if safe_float(r.get("daysToExpiration")) > 30]
-    t1 = le30[-1].get("expirationDate") if le30 else (s[1].get("expirationDate") if len(s) > 1 else f)
-    t2 = ge30[0].get("expirationDate") if ge30 else (s[-1].get("expirationDate") if s else f)
-    res = []
-    for x in [f, t1, t2]:
-        if x and x not in res: res.append(x)
-    return res
+def extract_market_open_status(client: Any) -> bool:
+    try:
+        r = client.get_market_hours("equity")
+        d = _parse_client_response(r)
+        if d:
+            eq = d.get("equity", {})
+            for m in ["EQ", "equity"]:
+                if m in eq and "isOpen" in eq[m]:
+                    return bool(eq[m]["isOpen"])
+    except Exception:
+        pass
+    now_et = datetime.now(timezone.utc).astimezone(ZoneInfo("America/New_York"))
+    if now_et.weekday() >= 5:
+        return False
+    return (9, 30) <= (now_et.hour, now_et.minute) < (16, 0)
 
-def extract_strict_underlying_data(client: Any, symbol: str, tz: Optional[ZoneInfo] = None) -> Dict[str, Any]:
-    clean_sym = symbol.strip().upper()
-    raw_payload = client.get_quote(symbol=clean_sym, fields="quote,fundamental,reference")
-    payload = raw_payload.get(clean_sym) or raw_payload.get(clean_sym.lower()) or raw_payload
-    if isinstance(payload, dict) and clean_sym in payload and isinstance(payload[clean_sym], dict):
-        payload = payload[clean_sym]
-    quote = payload.get("quote", {}) if isinstance(payload, dict) else {}
-    fund = payload.get("fundamental", {}) if isinstance(payload, dict) else {}
-    ref = payload.get("reference", {}) if isinstance(payload, dict) else {}
+def extract_strict_underlying_data(client: Any, symbol: str, tz_et: ZoneInfo) -> Dict[str, Any]:
+    r = client.get_quote(symbol)
+    res_dict = _parse_client_response(r)
+    if res_dict is None:
+        raise ValueError(f"Failed to fetch valid quote response for {symbol}")
+    data = res_dict.get(symbol, {})
+    ref = data.get("reference", {})
+    quote = data.get("quote", {})
+    fund = data.get("fundamental", {})
+    asset_sub = str(ref.get("assetSubType", "") or "").upper()
+    asset_main = str(ref.get("assetMainType", "") or "").upper()
+    desc = str(ref.get("description", "") or "").upper()
 
-    asset_type = str(ref.get("assetType") or quote.get("assetType") or "").upper()
-    description = str(ref.get("description") or quote.get("description") or "").upper()
-    is_adr = bool(ref.get("isAdr") or asset_type == "ADR" or "ADR" in description)
-    country = str(ref.get("country") or quote.get("country") or fund.get("country") or "").upper()
-    is_foreign = is_adr or (bool(country) and country not in {"US", "USA"}) or (clean_sym in KNOWN_FOREIGN_PRIVATE_ISSUERS)
-
-    raw_shares = safe_float(fund.get("sharesOutstanding"))
-    raw_pe = safe_float(fund.get("peRatio"))
-    raw_div_y = safe_float(fund.get("dividendYield") or fund.get("divYield"))
-    raw_div_a = safe_float(fund.get("dividendAmount") or fund.get("divAmount"))
-    gross_m = safe_float(fund.get("grossMarginTTM") or fund.get("grossMargin"))
-    net_m = safe_float(fund.get("netProfitMarginTTM") or fund.get("netProfitMargin"))
-    op_m = safe_float(fund.get("operatingMarginTTM") or fund.get("operatingMargin"))
-    m_absent = (gross_m is None and net_m is None and op_m is None)
-    tot_debt = safe_float(fund.get("totalDebtToEquity"))
+    is_structural_wrapper = (
+        asset_sub in ["ETF", "ETN", "MUTUAL_FUND", "CEF"] or
+        asset_main in ["ETF", "ETN", "MUTUAL_FUND", "FUND"] or
+        bool(re.search(r"\b(ETN|ETF|FUND|TRUST|INDEX NOTE|CEF|CLOSED-END|DLY|BULL|BEAR|2X|3X)\b", desc))
+    )
 
     last_p = safe_float(quote.get("lastPrice"))
     close_p = safe_float(quote.get("closePrice"))
-    bid_p = safe_float(quote.get("bidPrice"))
-    ask_p = safe_float(quote.get("askPrice"))
-    bid_sz = safe_float(quote.get("bidSize"))
-    ask_sz = safe_float(quote.get("askSize"))
-    tot_vol = safe_float(quote.get("totalVolume"))
+    q_time_raw = quote.get("quoteTime", 0)
+    if q_time_raw:
+        q_time_iso = datetime.fromtimestamp(q_time_raw / 1000.0, tz=timezone.utc).astimezone(tz_et).isoformat()
+        q_age = round((datetime.now(timezone.utc).timestamp() - (q_time_raw / 1000.0)), 2)
+    else:
+        q_time_iso = None
+        q_age = None
 
-    is_unquoted_halted = (last_p is None and close_p is None and tot_vol is None)
-
-    is_wrapper_explicit = (
-        not is_unquoted_halted and (
-            asset_type in {"ETF", "ETN", "MUTUAL_FUND", "COLLECTIVE_INVESTMENT", "CLOSED_END_FUND"}
-            or bool(re.search(r"\b(ETN|ETF|FUND|TRUST|INDEX NOTE|CEF|CLOSED-END)\b", description))
-        )
-    )
-    is_structural_wrapper = (
-        is_wrapper_explicit or (
-            not is_unquoted_halted and m_absent and tot_debt is None and (raw_pe is None or raw_pe <= 0.0)
-            and (raw_shares is None or (raw_div_y is not None and raw_div_y > 10.0))
-        )
-    )
-
-    q_epoch = quote.get("quoteTime")
-    zone = tz or ZoneInfo("America/New_York")
-    now_utc = datetime.now(timezone.utc)
-    q_iso = datetime.fromtimestamp(q_epoch / 1000.0, tz=timezone.utc).astimezone(zone).isoformat() if q_epoch and safe_float(q_epoch) and q_epoch > 0 else None
-    quote_age = max(0.0, (now_utc.timestamp() - (q_epoch / 1000.0))) if q_epoch and safe_float(q_epoch) and q_epoch > 0 else None
-    if quote_age is not None:
-        q_class = "REAL_TIME" if quote_age < 60.0 else ("RECENT" if quote_age <= 600.0 else ("DELAYED" if quote_age <= 3600.0 else "STALE"))
-        q_reason = None
+    if q_age is not None:
+        q_class = "REAL_TIME" if q_age <= 60.0 else ("RECENT" if q_age <= 600.0 else ("DELAYED" if q_age <= 3600.0 else "STALE"))
     else:
         q_class = "UNKNOWN"
-        q_reason = "quote_time_unavailable_or_halted_asset"
 
-    comp_name = description if description else clean_sym
-    grounding = {
-        "symbol": clean_sym,
-        "company_name": comp_name,
-        "lastPrice": f"${last_p:.2f}" if last_p is not None else None,
-        "closePrice": f"${close_p:.2f}" if close_p is not None else None,
-        "quoteTime_ISO_ET": q_iso,
-        "quote_age_seconds": round(quote_age, 2) if quote_age is not None else None,
-        "quote_age_classification": q_class
-    }
-    if q_reason:
-        grounding["quote_age_reason"] = q_reason
-    if is_unquoted_halted and not description:
-        grounding["company_name_status"] = "FALLBACK_TICKER_ONLY_UNQUOTED"
+    raw_shares = safe_float(fund.get("sharesOutstanding"))
+    raw_pe = safe_float(fund.get("peRatio"))
+    raw_eps = safe_float(fund.get("eps"))
+    raw_div_amt = safe_float(fund.get("divAmount"))
+    raw_div_y = safe_float(fund.get("divYield"))
+    raw_div_freq = safe_float(fund.get("divFreq"))
 
-    roe = safe_float(fund.get("returnOnEquity") or fund.get("roe"))
-    roa = safe_float(fund.get("returnOnAssets") or fund.get("roa"))
-    if net_m is not None and op_m is not None:
-        m_suspect = bool(net_m == op_m)
-        m_suspect_state = "AS_REPORTED"
-        m_suspect_reason = "vendor_net_and_operating_margins_identical" if m_suspect else None
-    else:
-        m_suspect = None
-        m_suspect_state = "VENDOR_UNAVAILABLE_INPUTS_ABSENT"
-        m_suspect_reason = None
+    is_foreign_adr = (
+        bool(re.search(r"\bADR\b", desc)) or
+        asset_sub == "ADR" or
+        bool(re.search(r"\b(CHINA|ISRAEL|UNITED KINGDOM|BERMUDA|NETHERLANDS|GERMANY|SWITZERLAND|FRANCE|IRELAND|JAPAN|TAIWAN|BRAZIL|CANADA|KOREA|SOUTH AFRICA)\b", desc))
+    )
 
-    if is_unquoted_halted:
-        shares_out = raw_shares
-        shares_state = "UNAVAILABLE_ASSET_HALTED_OR_UNQUOTED"
-    elif is_structural_wrapper:
-        shares_out = None
+    shares_val = raw_shares
+    if is_structural_wrapper:
+        shares_val = None
         shares_state = "UNAVAILABLE_FOR_ETN_OR_FUND"
+    elif last_p == 0.0 or close_p == 0.0:
+        shares_state = "CONFIRMED"
+    elif is_foreign_adr:
+        if raw_shares is not None:
+            shares_state = "VENDOR_PROVIDED_FOREIGN_ISSUER_UNVERIFIED"
+        else:
+            shares_state = "UNAVAILABLE_FOR_FOREIGN_ADR"
     elif raw_shares is not None and raw_shares > 0:
-        shares_out = raw_shares
-        shares_state = "VENDOR_PROVIDED_FOREIGN_ISSUER_UNVERIFIED" if is_foreign else "CONFIRMED"
+        shares_state = "CONFIRMED"
     else:
-        shares_out = None
-        shares_state = "UNAVAILABLE_FOR_FOREIGN_ADR" if is_foreign else "VENDOR_UNAVAILABLE"
+        shares_state = "VENDOR_UNAVAILABLE"
 
-    eps_val = safe_float(fund.get("eps") or fund.get("epsTTM"))
-    if is_unquoted_halted and eps_val is None:
-        eps = None
-        eps_state = "VENDOR_UNAVAILABLE_ASSET_HALTED"
-    elif is_structural_wrapper:
-        eps = None
+    if is_structural_wrapper:
+        pe_val = None
+        pe_state = "NOT_APPLICABLE_ETF_OR_FUND"
+        eps_val = None
         eps_state = "VENDOR_UNAVAILABLE_ETF_OR_ETN_NO_EPS"
-    elif is_foreign and (eps_val is None or eps_val == 0.0 or abs(eps_val) < 0.01):
-        eps = None
-        eps_state = "VENDOR_UNAVAILABLE_FOREIGN_ADR_SUPPRESSED"
-    elif eps_val is not None:
-        eps = eps_val
+    elif last_p == 0.0 or close_p == 0.0:
+        pe_val = raw_pe
+        pe_state = "AS_REPORTED"
+        eps_val = raw_eps
         eps_state = "AS_REPORTED"
     else:
-        eps = 0.0 if ("eps" in fund and fund.get("eps") == 0) else None
-        eps_state = "AS_REPORTED" if eps == 0.0 else "VENDOR_UNAVAILABLE"
-
-    if is_unquoted_halted and raw_pe is None:
-        pe_out = None
-        pe_state = "VENDOR_UNAVAILABLE_ASSET_HALTED"
-    elif is_structural_wrapper:
-        pe_out = None
-        pe_state = "NOT_APPLICABLE_ETF_OR_FUND"
-    else:
-        pe_out = raw_pe
+        pe_val = raw_pe
         pe_state = "AS_REPORTED" if raw_pe is not None else "VENDOR_UNAVAILABLE"
+        if is_foreign_adr and raw_eps is None:
+            eps_val = None
+            eps_state = "VENDOR_UNAVAILABLE_FOREIGN_ADR_SUPPRESSED"
+        else:
+            eps_val = raw_eps
+            eps_state = "AS_REPORTED" if raw_eps is not None else "VENDOR_UNAVAILABLE"
 
-    raw_div_f = safe_float(fund.get("dividendFreq") or fund.get("divFreq"))
-    is_non_payer = (raw_div_y == 0.0 or raw_div_a == 0.0 or (raw_div_y is None and raw_div_a is None))
-    if is_non_payer:
-        div_y, div_y_raw, div_amt, freq, div_basis = 0.0, 0.0, 0.0, 0.0, "AS_REPORTED_ZERO_NON_PAYER"
+    is_zero_div = (raw_div_y == 0.0 or raw_div_amt == 0.0)
+    div_y_basis = "AS_REPORTED_ZERO_NON_PAYER" if is_zero_div else ("ANNUAL_VENDOR_CONFIRMED" if raw_div_y is not None else "VENDOR_UNAVAILABLE")
+
+    div_freq_state = None
+    if not is_zero_div and raw_div_y is not None and raw_div_freq is None:
+        div_freq_state = "VENDOR_UNAVAILABLE_FREQUENCY_UNSPECIFIED"
+
+    net_m = safe_float(fund.get("netProfitMarginTTM"))
+    op_m = safe_float(fund.get("operatingMarginTTM"))
+    gross_m = safe_float(fund.get("grossMarginTTM"))
+
+    if net_m is not None and op_m is not None:
+        if abs(net_m - op_m) < 1e-6 and abs(net_m) > 0.0:
+            margin_suspect = True
+            margin_reason = "vendor_net_and_operating_margins_identical"
+            margin_state = "SUSPECT_VENDOR_DATA"
+        else:
+            margin_suspect = False
+            margin_reason = "margins_structurally_differentiated"
+            margin_state = "CONFIRMED"
     else:
-        div_y = raw_div_y
-        div_y_raw = raw_div_y
-        div_amt = raw_div_a if raw_div_a is not None else 0.0
-        freq = raw_div_f if raw_div_f in ALLOWED_DIV_FREQS else None
-        div_basis = "ANNUAL_VENDOR_CONFIRMED" if raw_div_y is not None else "VENDOR_UNAVAILABLE"
+        margin_suspect = None
+        margin_reason = None
+        margin_state = "VENDOR_UNAVAILABLE_INPUTS_ABSENT"
 
-    raw_mcap = safe_float(fund.get("marketCap") or fund.get("marketCapitalization"))
+    short_stat = quote.get("shortLocate", {})
+    is_shortable = bool(short_stat.get("isShortable", quote.get("isShortable", True)))
+    is_htb = bool(short_stat.get("isHardToBorrow", quote.get("isHardToBorrow", False)))
+    raw_htb_rate = safe_float(short_stat.get("rate", quote.get("htbRate")))
 
-    step1 = {
+    htb_rate_val = raw_htb_rate
+    raw_htb_store = None
+    if not is_htb:
+        htb_status = "NOT_APPLICABLE_ETB"
+    elif raw_htb_rate is not None and raw_htb_rate < 0.0:
+        htb_status = "INVALID_NEGATIVE_VENDOR_RATE"
+        raw_htb_store = raw_htb_rate
+        htb_rate_val = None
+    elif raw_htb_rate == 0.0:
+        htb_status = "HTB_FLAG_ACTIVE_RATE_PENDING_BROKER_LOCATE"
+    elif raw_htb_rate is not None:
+        htb_status = "LOCATE_AVAILABLE"
+    else:
+        htb_status = "VENDOR_UNAVAILABLE_LOCATE_PENDING"
+
+    short_dict: Dict[str, Any] = {
+        "state": "FULL_PASSTHROUGH",
+        "isShortable": is_shortable,
+        "isHardToBorrow": is_htb,
+        "htbRate": htb_rate_val,
+        "htb_rate_status": htb_status
+    }
+    if raw_htb_store is not None:
+        short_dict["htbRate_raw"] = raw_htb_store
+
+    bid_p = safe_float(quote.get("bidPrice"))
+    ask_p = safe_float(quote.get("askPrice"))
+    bid_s = safe_float(quote.get("bidSize", 0.0))
+    ask_s = safe_float(quote.get("askSize", 0.0))
+    tot_vol = safe_float(quote.get("totalVolume", 0.0))
+
+    liq_state = "FULL_PASSTHROUGH"
+    book_note = None
+    book_reason = None
+    spread_warn = None
+
+    if bid_s == 0.0 and ask_s == 0.0:
+        liq_state = "UNVERIFIED_EMPTY_ORDER_BOOK"
+        if tot_vol is not None and tot_vol > 0.0:
+            book_reason = "zero_bid_ask_depth_with_reported_volume"
+            book_note = "ZERO_BID_ASK_DEPTH_REPORTED"
+        else:
+            book_reason = "zero_book_activity_recorded"
+            book_note = "EMPTY_ORDER_BOOK_NO_VOLUME"
+
+    if bid_p is not None and ask_p is not None and bid_p > 0.0:
+        rel_spr = (ask_p - bid_p) / bid_p
+        if rel_spr > 2.0:
+            spread_warn = "EXTREME_SPREAD_EXCEEDS_200_PCT_HEURISTIC"
+
+    liq_dict: Dict[str, Any] = {
+        "state": liq_state,
+        "bidPrice": f"${bid_p:.2f}" if bid_p is not None else None,
+        "askPrice": f"${ask_p:.2f}" if ask_p is not None else None,
+        "bidSize": bid_s,
+        "askSize": ask_s,
+        "totalVolume": tot_vol,
+        "vol10DayAvg": safe_float(fund.get("vol10DayAvg")),
+        "vol10DayAvg_state": "AS_REPORTED" if fund.get("vol10DayAvg") is not None else "VENDOR_UNAVAILABLE",
+        "vol3MonthAvg_state": "VENDOR_FIELD_NOT_PROVIDED",
+        "vol1YearAvg": safe_float(fund.get("vol1YearAvg")),
+        "vol1YearAvg_state": "VENDOR_SUSPECT_ZERO" if fund.get("vol1YearAvg") == 0.0 else ("AS_REPORTED" if fund.get("vol1YearAvg") is not None else "VENDOR_UNAVAILABLE")
+    }
+    if book_reason:
+        liq_dict["reason"] = book_reason
+    if book_note:
+        liq_dict["book_liquidity_note"] = book_note
+    if spread_warn:
+        liq_dict["spread_warning"] = spread_warn
+
+    fund_dict: Dict[str, Any] = {
         "beta": safe_float(fund.get("beta")),
-        "beta_state": "AS_REPORTED" if safe_float(fund.get("beta")) is not None else "VENDOR_UNAVAILABLE",
-        "peRatio": pe_out,
+        "beta_state": "AS_REPORTED" if fund.get("beta") is not None else "VENDOR_UNAVAILABLE",
+        "peRatio": pe_val,
         "peRatio_state": pe_state,
         "pegRatio": safe_float(fund.get("pegRatio")),
-        "pegRatio_state": "AS_REPORTED" if safe_float(fund.get("pegRatio")) is not None else "VENDOR_UNAVAILABLE",
+        "pegRatio_state": "AS_REPORTED" if fund.get("pegRatio") is not None else "VENDOR_UNAVAILABLE",
         "pcfRatio": safe_float(fund.get("pcfRatio")),
-        "pcfRatio_state": "AS_REPORTED" if safe_float(fund.get("pcfRatio")) is not None else "VENDOR_UNAVAILABLE",
+        "pcfRatio_state": "AS_REPORTED" if fund.get("pcfRatio") is not None else "VENDOR_UNAVAILABLE",
         "pbRatio": safe_float(fund.get("pbRatio")),
-        "totalDebtToEquity": tot_debt,
+        "totalDebtToEquity": safe_float(fund.get("totalDebtToEquity")),
         "totalDebtToEquity_basis": "VENDOR_RAW_UNVERIFIED",
         "grossMarginTTM": gross_m,
         "netProfitMarginTTM": net_m,
         "operatingMarginTTM": op_m,
-        "margin_fields_suspect": m_suspect,
-        "margin_fields_suspect_reason": m_suspect_reason,
-        "margin_fields_suspect_state": m_suspect_state,
-        "returnOnEquity": roe,
-        "returnOnEquity_state": "AS_REPORTED" if roe is not None else "VENDOR_UNAVAILABLE",
-        "returnOnAssets": roa,
-        "returnOnAssets_state": "AS_REPORTED" if roa is not None else "VENDOR_UNAVAILABLE",
-        "eps": eps,
+        "margin_fields_suspect": margin_suspect,
+        "margin_fields_suspect_reason": margin_reason,
+        "margin_fields_suspect_state": margin_state,
+        "returnOnEquity": safe_float(fund.get("returnOnEquity")),
+        "returnOnEquity_state": "AS_REPORTED" if fund.get("returnOnEquity") is not None else "VENDOR_UNAVAILABLE",
+        "returnOnAssets": safe_float(fund.get("returnOnAssets")),
+        "returnOnAssets_state": "AS_REPORTED" if fund.get("returnOnAssets") is not None else "VENDOR_UNAVAILABLE",
+        "eps": eps_val,
         "eps_state": eps_state,
         "revChangeYear": safe_float(fund.get("revChangeYear")),
-        "revChangeYear_state": "AS_REPORTED",
-        "divYield": div_y,
-        "divYield_basis": div_basis,
-        "divYield_raw": div_y_raw,
-        "divAmount": f"${div_amt:.2f}",
+        "revChangeYear_state": "AS_REPORTED" if fund.get("revChangeYear") is not None else "VENDOR_UNAVAILABLE",
+        "divYield": raw_div_y if raw_div_y is not None else 0.0,
+        "divYield_basis": div_y_basis,
+        "divYield_raw": raw_div_y if raw_div_y is not None else 0.0,
+        "divAmount": f"${raw_div_amt:.2f}" if raw_div_amt is not None else "$0.00",
         "div_amount_basis": "ANNUAL",
-        "divFreq": freq,
-        "sharesOutstanding": shares_out,
+        "divFreq": raw_div_freq,
+        "sharesOutstanding": shares_val,
         "shares_outstanding_state": shares_state,
-        "marketCap": raw_mcap,
+        "marketCap": safe_float(fund.get("marketCap")),
         "marketCap_unit": "VENDOR_RAW_UNVERIFIED"
     }
-
-    is_short = ref.get("isShortable")
-    is_htb = ref.get("isHardToBorrow")
-    raw_htb_r = safe_float(ref.get("htbRate"))
-    if raw_htb_r is not None and raw_htb_r < 0.0:
-        htb_r, htb_status = None, "INVALID_NEGATIVE_VENDOR_RATE"
-    elif is_htb and (raw_htb_r == 0.0 or raw_htb_r is None):
-        htb_r, htb_status = 0.0, "HTB_FLAG_ACTIVE_RATE_PENDING_BROKER_LOCATE"
-    elif is_htb:
-        htb_r, htb_status = raw_htb_r or 0.0, "RATE_CONFIRMED"
-    else:
-        htb_r, htb_status = raw_htb_r or 0.0, "NOT_APPLICABLE_ETB"
-
-    short_loc = {
-        "state": "FULL_PASSTHROUGH",
-        "isShortable": is_short if isinstance(is_short, bool) else True,
-        "isHardToBorrow": is_htb if isinstance(is_htb, bool) else False,
-        "htbRate": htb_r,
-        "htb_rate_status": htb_status
-    }
-    if raw_htb_r is not None and raw_htb_r < 0.0:
-        short_loc["htbRate_raw"] = raw_htb_r
-
-    is_zero_book = (tot_vol == 0.0 and (bid_sz == 0.0 or bid_sz is None) and (ask_sz == 0.0 or ask_sz is None))
-    is_crossed = (bid_p is not None and ask_p is not None and bid_p == ask_p and (tot_vol == 0.0 or tot_vol is None))
-
-    if is_unquoted_halted:
-        liq_state, liq_reason = "UNKNOWN", "quote_book_empty_asset_halted_or_unquoted"
-    elif is_crossed:
-        liq_state, liq_reason = "SUSPECT_CROSSED_OR_ZERO_DEPTH", "bid_ask_identical_zero_trading_volume"
-    elif is_zero_book:
-        liq_state, liq_reason = "ZERO_BOOK_ACTIVITY_RECORDED", "no_volume_and_zero_book_depth"
-    else:
-        liq_state, liq_reason = "FULL_PASSTHROUGH", None
-
-    v10 = safe_float(fund.get("vol10DayAvg") or fund.get("avg10DaysVolume"))
-    v1y = safe_float(fund.get("vol1YearAvg") or fund.get("avg1YearVolume"))
-    liq = {
-        "state": liq_state,
-        "bidPrice": f"${bid_p:.2f}" if bid_p is not None else None,
-        "askPrice": f"${ask_p:.2f}" if ask_p is not None else None,
-        "bidSize": bid_sz,
-        "askSize": ask_sz,
-        "totalVolume": tot_vol
-    }
-    if liq_reason: liq["reason"] = liq_reason
-    if v10 is not None and v10 > 0.0:
-        liq["vol10DayAvg"] = v10
-        liq["vol10DayAvg_state"] = "AS_REPORTED"
-    else:
-        liq["vol10DayAvg_state"] = "VENDOR_SUSPECT_ZERO" if (v10 == 0.0 and tot_vol and tot_vol > 1000000.0) else "VENDOR_UNAVAILABLE"
-    liq["vol3MonthAvg_state"] = "VENDOR_FIELD_NOT_PROVIDED"
-    if v1y is not None and v1y > 0.0:
-        liq["vol1YearAvg"] = v1y
-        liq["vol1YearAvg_state"] = "AS_REPORTED"
-    else:
-        liq["vol1YearAvg_state"] = "VENDOR_SUSPECT_ZERO" if (v1y == 0.0 and tot_vol and tot_vol > 1000000.0) else "VENDOR_UNAVAILABLE"
+    if div_freq_state:
+        fund_dict["divFreq_state"] = div_freq_state
 
     return {
-        "phase_0_grounding": grounding,
-        "step_1_fundamentals": step1,
-        "short_locate_status": short_loc,
-        "step_8_and_9_liquidity_and_sizing": liq
+        "phase_0_grounding": {
+            "symbol": symbol,
+            "company_name": desc,
+            "lastPrice": f"${last_p:.2f}" if last_p is not None else None,
+            "closePrice": f"${close_p:.2f}" if close_p is not None else None,
+            "quoteTime_ISO_ET": q_time_iso,
+            "quote_age_seconds": q_age,
+            "quote_age_classification": q_class
+        },
+        "step_1_fundamentals": fund_dict,
+        "short_locate_status": short_dict,
+        "step_8_and_9_liquidity_and_sizing": liq_dict
     }
 
-def extract_in_memory_price_history(client: Any, symbol: str, cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
+def extract_in_memory_price_history(client: Any, symbol: str, config: Dict[str, Any]) -> List[Dict[str, Any]]:
     try:
-        raw = client.get_price_history(
-            symbol=symbol.strip().upper(),
-            period_type=cfg.get("HISTORICAL_PERIOD_TYPE", "year"),
-            period=cfg.get("HISTORICAL_PERIOD", 1),
-            frequency_type=cfg.get("HISTORICAL_FREQUENCY_TYPE", "daily"),
-            frequency=cfg.get("HISTORICAL_FREQUENCY", 1),
-            need_extended_hours=cfg.get("HISTORICAL_NEED_EXTENDED_HOURS", False)
+        r = client.get_price_history(
+            symbol,
+            period_type=config.get("HISTORICAL_PERIOD_TYPE", "year"),
+            period=config.get("HISTORICAL_PERIOD", 1),
+            frequency_type=config.get("HISTORICAL_FREQUENCY_TYPE", "daily"),
+            frequency=config.get("HISTORICAL_FREQUENCY", 1),
+            need_extended_hours_data=config.get("HISTORICAL_NEED_EXTENDED_HOURS", False)
         )
-        candles = raw.get("candles", []) if isinstance(raw, dict) else []
-        res = []
-        for c in candles:
-            o, h, l, cl = safe_float(c.get("open")), safe_float(c.get("high")), safe_float(c.get("low")), safe_float(c.get("close"))
-            if all(x is not None and x > 0 for x in [o, h, l, cl]):
-                res.append({"datetime": c.get("datetime"), "open": o, "high": h, "low": l, "close": cl, "volume": safe_float(c.get("volume"))})
-        return res
-    except Exception: return []
+        d = _parse_client_response(r)
+        if d:
+            candles = d.get("candles", []) or []
+            valid_candles = [
+                c for c in candles
+                if safe_float(c.get("close")) is not None and safe_float(c.get("close")) > 0.01
+                and safe_float(c.get("open")) is not None and safe_float(c.get("open")) > 0.01
+            ]
+            return valid_candles
+    except Exception:
+        pass
+    return []
 
 def extract_in_memory_option_expirations(client: Any, symbol: str) -> List[Dict[str, Any]]:
     try:
-        p = client.get_option_expirations(symbol.strip().upper())
-        el = p.get("expirationList", []) if isinstance(p, dict) else []
-        return sorted([{"expirationDate": r.get("expirationDate"), "daysToExpiration": int(r.get("daysToExpiration"))} for r in el if r.get("expirationDate") and r.get("daysToExpiration") is not None], key=lambda x: x["daysToExpiration"])
-    except Exception: return []
-
-def extract_in_memory_option_chains(client: Any, symbol: str, target_expirations: List[str], strike_count: int = 14, strategy: str = "SINGLE", include_underlying_quote: bool = True) -> Tuple[Optional[float], Optional[float], List[Dict[str, Any]], Dict[str, Any]]:
-    if not target_expirations:
-        return None, None, [], {"rejected_zero_strike_count": 0, "rejected_expired_contract_count": 0, "rejected_negative_mark_count": 0, "rejected_negative_price_count": 0}
-    try:
-        f_date, t_date = target_expirations[0], target_expirations[-1]
-        raw_chain = client.get_option_chain(symbol=symbol.strip().upper(), contract_type="ALL", strike_count=strike_count, include_underlying_quote=include_underlying_quote, strategy=strategy, from_date=f_date, to_date=t_date)
-        vol_30d = safe_float(raw_chain.get("volatility"))
-        u_quote = raw_chain.get("underlying", {}) or {}
-        u_price = safe_float(u_quote.get("last")) or safe_float(u_quote.get("close")) or safe_float(u_quote.get("mark")) or safe_float(raw_chain.get("underlyingPrice"))
-        records, tele = [], {"rejected_zero_strike_count": 0, "rejected_expired_contract_count": 0, "rejected_negative_mark_count": 0, "rejected_negative_price_count": 0}
-        def parse_map(m: Dict[str, Any], default_ind: str):
-            if not isinstance(m, dict): return
-            for exp_key, s_map in m.items():
-                parts = exp_key.split(":")
-                dte = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else None
-                if dte is not None and dte < 0:
-                    tele["rejected_expired_contract_count"] += 1
-                    continue
-                if not isinstance(s_map, dict): continue
-                for _, clist in s_map.items():
-                    if not isinstance(clist, list): continue
-                    for c in clist:
-                        k = safe_float(c.get("strikePrice"))
-                        if k is None or k <= 0:
-                            tele["rejected_zero_strike_count"] += 1
-                            continue
-                        bid, ask, mark = safe_float(c.get("bid")), safe_float(c.get("ask")), safe_float(c.get("mark"))
-                        if mark is not None and mark < 0:
-                            tele["rejected_negative_mark_count"] += 1
-                            continue
-                        if (bid is not None and bid < 0) or (ask is not None and ask < 0):
-                            tele["rejected_negative_price_count"] += 1
-                            continue
-                        records.append({
-                            "putCallIndicator": c.get("putCallIndicator", default_ind),
-                            "daysToExpiration": dte if dte is not None else c.get("daysToExpiration"),
-                            "strikePrice": k,
-                            "bid": bid, "ask": ask, "mark": mark,
-                            "totalVolume": safe_float(c.get("totalVolume")),
-                            "openInterest": safe_float(c.get("openInterest")),
-                            "volatility": safe_float(c.get("volatility")),
-                            "delta": safe_float(c.get("delta")),
-                            "gamma": safe_float(c.get("gamma")),
-                            "theta": safe_float(c.get("theta")),
-                            "vega": safe_float(c.get("vega")),
-                            "inTheMoney": c.get("inTheMoney")
-                        })
-        parse_map(raw_chain.get("callExpDateMap", {}), "CALL")
-        parse_map(raw_chain.get("putExpDateMap", {}), "PUT")
-        return vol_30d, u_price, records, tele
+        r = client.get_option_expiration_chain(symbol)
+        d = _parse_client_response(r)
+        if d:
+            return d.get("expirationList", []) or []
     except Exception:
-        return None, None, [], {"rejected_zero_strike_count": 0, "rejected_expired_contract_count": 0, "rejected_negative_mark_count": 0, "rejected_negative_price_count": 0}
+        pass
+    return []
+
+def resolve_optimal_expirations(exp_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    valid = [e for e in exp_list if safe_float(e.get("daysToExpiration")) is not None and int(e["daysToExpiration"]) >= 0]
+    if not valid:
+        return []
+    sorted_exps = sorted(valid, key=lambda x: int(x["daysToExpiration"]))
+    front = sorted_exps[0]
+    t1_cands = [e for e in sorted_exps if int(e["daysToExpiration"]) <= 30]
+    t2_cands = [e for e in sorted_exps if int(e["daysToExpiration"]) >= 30]
+    t1 = t1_cands[-1] if t1_cands else sorted_exps[0]
+    t2 = t2_cands[0] if t2_cands else sorted_exps[-1]
+    targets = [front, t1, t2]
+    seen = set()
+    uniq = []
+    for t in targets:
+        k = t.get("expirationDate")
+        if k not in seen:
+            seen.add(k)
+            uniq.append(t)
+    return uniq
+
+def extract_in_memory_option_chains(
+    client: Any,
+    symbol: str,
+    target_expirations: List[Dict[str, Any]],
+    strike_window: int = 14,
+    strategy: str = "SINGLE",
+    strike_proximities: bool = True
+) -> Tuple[Optional[float], Optional[float], List[Dict[str, Any]], Dict[str, Any]]:
+    telemetry = {
+        "rejected_zero_strike_count": 0,
+        "rejected_expired_contract_count": 0,
+        "rejected_negative_mark_count": 0,
+        "rejected_negative_price_count": 0
+    }
+    if not target_expirations:
+        return None, None, [], telemetry
+    all_contracts: List[Dict[str, Any]] = []
+    underlying_price = None
+    vol_30d = None
+    for exp in target_expirations:
+        exp_date = exp.get("expirationDate")
+        try:
+            r = client.get_option_chain(
+                symbol,
+                strike_count=strike_window,
+                from_date=exp_date,
+                to_date=exp_date,
+                strategy=strategy
+            )
+            payload = _parse_client_response(r)
+            if not payload:
+                continue
+            if underlying_price is None:
+                underlying_price = safe_float(payload.get("underlyingPrice"))
+            if vol_30d is None:
+                vol_30d = safe_float(payload.get("volatility"))
+            for book_key in ["callExpDateMap", "putExpDateMap"]:
+                book = payload.get(book_key, {})
+                for date_key, strikes in book.items():
+                    for strike_key, contract_list in strikes.items():
+                        for c in contract_list:
+                            s_val = safe_float(c.get("strikePrice"))
+                            dte_val = c.get("daysToExpiration")
+                            mark_val = safe_float(c.get("mark"))
+                            bid_val = safe_float(c.get("bid"))
+                            ask_val = safe_float(c.get("ask"))
+                            if s_val is None or s_val <= 0:
+                                telemetry["rejected_zero_strike_count"] += 1
+                                continue
+                            if dte_val is None or int(dte_val) < 0:
+                                telemetry["rejected_expired_contract_count"] += 1
+                                continue
+                            if mark_val is not None and mark_val < 0:
+                                telemetry["rejected_negative_mark_count"] += 1
+                                continue
+                            if (bid_val is not None and bid_val < 0) or (ask_val is not None and ask_val < 0):
+                                telemetry["rejected_negative_price_count"] += 1
+                                continue
+                            all_contracts.append(c)
+        except Exception:
+            continue
+    return vol_30d, underlying_price, all_contracts, telemetry

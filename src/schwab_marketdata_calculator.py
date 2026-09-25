@@ -6,16 +6,20 @@ import numpy as np
 import pandas as pd
 
 def safe_float(v: Any) -> Optional[float]:
-    if v is None or pd.isna(v): return None
+    if v is None or pd.isna(v):
+        return None
     try:
         f = float(str(v).replace("$", "").replace(",", "").strip())
-        if math.isnan(f) or math.isinf(f): return None
+        if math.isnan(f) or math.isinf(f):
+            return None
         return 0.0 if (f == 0.0 or abs(f) < 1e-12) else f
-    except (ValueError, TypeError): return None
+    except (ValueError, TypeError):
+        return None
 
 def safe_div(n: Any, d: Any) -> Optional[float]:
     fn, fd = safe_float(n), safe_float(d)
-    if fn is None or fd is None or fd == 0.0: return None
+    if fn is None or fd is None or fd == 0.0:
+        return None
     res = fn / fd
     return None if math.isnan(res) or math.isinf(res) else res
 
@@ -62,14 +66,26 @@ class MasterThesisCalculator:
         }
 
     def _calc_step_1(self) -> Dict[str, Any]:
-        pe, eps, div_amt = safe_float(self.fund.get("peRatio")), safe_float(self.fund.get("eps")), safe_float(self.fund.get("divAmount"))
-        shares, mcap = safe_float(self.fund.get("sharesOutstanding")), safe_float(self.fund.get("marketCap"))
+        pe = safe_float(self.fund.get("peRatio"))
+        eps = safe_float(self.fund.get("eps"))
+        div_amt = safe_float(self.fund.get("divAmount"))
         div_y = safe_float(self.fund.get("divYield"))
+        shares = safe_float(self.fund.get("sharesOutstanding"))
+        mcap = safe_float(self.fund.get("marketCap"))
         eps_state = str(self.fund.get("eps_state") or "")
         pe_state = str(self.fund.get("peRatio_state") or "")
         shares_state = str(self.fund.get("shares_outstanding_state") or "")
-        is_halted = (shares_state == "UNAVAILABLE_ASSET_HALTED_OR_UNQUOTED" or eps_state == "VENDOR_UNAVAILABLE_ASSET_HALTED" or pe_state == "VENDOR_UNAVAILABLE_ASSET_HALTED")
-        is_etn = not is_halted and (shares_state == "UNAVAILABLE_FOR_ETN_OR_FUND" or eps_state == "VENDOR_UNAVAILABLE_ETF_OR_ETN_NO_EPS" or pe_state == "NOT_APPLICABLE_ETF_OR_FUND")
+
+        is_halted = (
+            shares_state == "UNAVAILABLE_ASSET_HALTED_OR_UNQUOTED" or
+            eps_state == "VENDOR_UNAVAILABLE_ASSET_HALTED" or
+            pe_state == "VENDOR_UNAVAILABLE_ASSET_HALTED"
+        )
+        is_etn = not is_halted and (
+            shares_state == "UNAVAILABLE_FOR_ETN_OR_FUND" or
+            eps_state == "VENDOR_UNAVAILABLE_ETF_OR_ETN_NO_EPS" or
+            pe_state == "NOT_APPLICABLE_ETF_OR_FUND"
+        )
 
         derived_mcap = round(self.calc_spot * shares, 2) if self.calc_spot and shares else None
         mcap_note = None
@@ -107,11 +123,15 @@ class MasterThesisCalculator:
                 "market_cap_divergence_state": "UNVERIFIED_COMPONENTS",
                 "market_cap_divergence_reason": div_rsn
             }
-        if mcap_note: mcap_div["market_cap_basis_note"] = mcap_note
+        if mcap_note:
+            mcap_div["market_cap_basis_note"] = mcap_note
         calc: Dict[str, Any] = {"market_cap_divergence": mcap_div}
 
         spot_near_zero = (self.calc_spot is not None and self.calc_spot <= 0.01)
         eps_non_pos = (eps is None or eps <= 0.0 or abs(eps) < 0.01)
+
+        near_zero_pe_stub = (pe is not None and 0.0 < pe <= 0.05)
+        class_mismatch_eps = bool(self.calc_spot and eps and eps > self.calc_spot * 2.0)
 
         if is_halted:
             calc["earnings_yield_state"] = "N/A"
@@ -131,6 +151,9 @@ class MasterThesisCalculator:
                     calc["earnings_yield_reason"] = "pe_ratio_unsupported_by_sub_cent_reported_eps"
                 else:
                     calc["earnings_yield_reason"] = "pe_ratio_unsupported_by_non_positive_reported_eps"
+            elif near_zero_pe_stub or class_mismatch_eps:
+                calc["earnings_yield_state"] = "N/A"
+                calc["earnings_yield_reason"] = "pe_ratio_structurally_inconsistent_with_trailing_eps"
             elif self.calc_spot and ((pe * eps / self.calc_spot > 100.0) or (self.calc_spot / (pe * eps) > 100.0)):
                 calc["earnings_yield_state"] = "N/A"
                 calc["earnings_yield_reason"] = "pe_ratio_structurally_inconsistent_with_trailing_eps"
@@ -153,6 +176,11 @@ class MasterThesisCalculator:
         elif is_etn or pe_state == "NOT_APPLICABLE_ETF_OR_FUND":
             calc["pe_eps_vintage_disparity"] = None
             calc["pe_eps_disparity_state"] = "NOT_APPLICABLE_ETF_OR_FUND"
+        elif not is_etn and pe and pe < 0 and imp_pe and imp_pe > 0:
+            calc["pe_eps_vintage_disparity"] = True
+            calc["pe_eps_disparity_state"] = "NEGATIVE_REPORTED_PE_POSITIVE_EPS"
+            calc["implied_trailing_pe"] = round(imp_pe, 2)
+            calc["pe_basis_note"] = "reported_pe_reflects_negative_forward_consensus_vs_positive_trailing_eps"
         elif not is_etn and pe and pe > 0 and imp_pe and imp_pe > 0:
             disp_pct = round(abs(pe - imp_pe) / imp_pe * 100.0, 2)
             has_disp = disp_pct > 10.0
@@ -161,8 +189,10 @@ class MasterThesisCalculator:
             calc["pe_eps_disparity_state"] = disp_state
             calc["implied_trailing_pe"] = round(imp_pe, 2)
             calc["pe_eps_disparity_pct"] = disp_pct
-            if disp_pct > 100.0: calc["pe_basis_note"] = "SEVERE_DISPARITY_CAUSE_UNVERIFIED"
-            elif has_disp: calc["pe_basis_note"] = "reported_pe_reflects_forward_consensus_vs_trailing_eps"
+            if disp_pct > 100.0:
+                calc["pe_basis_note"] = "SEVERE_DISPARITY_CAUSE_UNVERIFIED"
+            elif has_disp:
+                calc["pe_basis_note"] = "reported_pe_reflects_forward_consensus_vs_trailing_eps"
         else:
             calc["pe_eps_vintage_disparity"] = None
             calc["pe_eps_disparity_state"] = "NOT_APPLICABLE"
@@ -200,7 +230,14 @@ class MasterThesisCalculator:
                 calc["payout_exceeds_earnings"] = False
         else:
             calc["dividend_payout_ratio_state"] = "UNKNOWN"
-            calc["dividend_payout_ratio_reason"] = "eps_zero_denominator_hazard" if eps == 0.0 else ("eps_sub_cent_denominator_hazard" if (eps and abs(eps) < 0.01) else "missing_dividend_or_eps_data")
+            if eps == 0.0:
+                calc["dividend_payout_ratio_reason"] = "eps_zero_denominator_hazard"
+            elif eps is not None and abs(eps) < 0.01:
+                calc["dividend_payout_ratio_reason"] = "eps_sub_cent_denominator_hazard"
+            elif eps is not None and eps < 0.0:
+                calc["dividend_payout_ratio_reason"] = "negative_eps_unsupported_payout"
+            else:
+                calc["dividend_payout_ratio_reason"] = "missing_dividend_or_eps_data"
             calc["dividend_payout_ratio_health"] = "UNSUSTAINABLE_OR_DISTORTED"
 
         if is_halted:
@@ -216,7 +253,8 @@ class MasterThesisCalculator:
             calc["full_capital_coverage_unknown"] = calc["coverage_unknown"]
             calc["distribution_coverage_unknown"] = True
             calc["share_count_coverage_unknown"] = True
-            if calc["coverage_unknown"]: calc["coverage_unknown_reason"] = "etn_or_fund_no_earnings_or_shares"
+            if calc["coverage_unknown"]:
+                calc["coverage_unknown_reason"] = "etn_or_fund_no_earnings_or_shares"
             if div_y and div_y > 10.0 and self.calc_spot:
                 c_y = safe_div(div_amt * 100.0, self.calc_spot)
                 if c_y:
@@ -266,6 +304,8 @@ class MasterThesisCalculator:
         p_oi, c_oi = puts["openInterest"].sum(), calls["openInterest"].sum()
         vr = safe_div(p_vol, c_vol)
         oir = safe_div(p_oi, c_oi)
+
+        tot_vol = (p_vol or 0.0) + (c_vol or 0.0)
         if vr is None:
             regime = "NO_OPTIONS_VOLUME"
         elif vr < 0.50:
@@ -274,14 +314,22 @@ class MasterThesisCalculator:
             regime = "HEAVY_PUT_FLOW"
         else:
             regime = "NEUTRAL"
+
+        flow_state = "CALCULATED" if c_vol > 0 and c_oi > 0 else "UNKNOWN"
         flow: Dict[str, Any] = {
             "put_call_volume_ratio": round(vr, 4) if vr is not None else None,
             "put_call_open_interest_ratio": round(oir, 4) if oir is not None else None,
             "volume_regime": regime,
-            "state": "CALCULATED" if c_vol > 0 and c_oi > 0 else "UNKNOWN"
+            "state": flow_state
         }
+        if flow_state == "UNKNOWN" and tot_vol == 0.0:
+            flow["reason"] = "options_chain_has_zero_contract_volume"
+
         if p_vol == 0.0 and c_vol > 0.0:
             flow["flow_ratios_note"] = "ZERO_PUT_VOLUME_OBSERVED"
+        if p_oi == 0.0 and c_oi > 0.0:
+            flow["flow_oi_note"] = "ZERO_PUT_OPEN_INTEREST_OBSERVED"
+
         skew_block = self._calc_skew_30d(df, cmi_block)
         atm_block = self._calc_atm_straddle(df)
         return {
@@ -293,33 +341,52 @@ class MasterThesisCalculator:
         }
 
     def _calc_cmi_30d(self, df: pd.DataFrame) -> Dict[str, Any]:
-        if df.empty: return {"state": "UNKNOWN", "reason": "options_chain_empty_or_unavailable"}
+        if df.empty:
+            return {"state": "UNKNOWN", "reason": "options_chain_empty_or_unavailable"}
         dtes = sorted(list({int(d) for d in df["daysToExpiration"].dropna() if int(d) >= 0}))
-        if not dtes: return {"state": "UNKNOWN", "reason": "no_valid_expirations"}
+        if not dtes:
+            return {"state": "UNKNOWN", "reason": "no_valid_expirations"}
         t1_cand = [d for d in dtes if d <= 30]
         t2_cand = [d for d in dtes if d >= 30]
         t1 = t1_cand[-1] if t1_cand else dtes[0]
         t2 = t2_cand[0] if t2_cand else dtes[-1]
         span = abs(t2 - t1)
-        quality = "TIGHT" if span <= 10 else "WIDE"
+        quality = "DEGENERATE_SINGLE_EXPIRATION" if span == 0 else ("TIGHT" if span <= 10 else "WIDE")
+
         def get_mean_iv(dte_val: int) -> Optional[float]:
             sub = df[df["daysToExpiration"] == dte_val]
-            if sub.empty: return None
+            if sub.empty:
+                return None
             sub = sub.assign(d_diff=(sub["strikePrice"] - self.calc_spot).abs())
             atm_k = sub.loc[sub["d_diff"].idxmin(), "strikePrice"]
             vols = sub[sub["strikePrice"] == atm_k]["volatility"].dropna()
             return float(vols.mean()) if not vols.empty else None
+
         iv1, iv2 = get_mean_iv(t1), get_mean_iv(t2)
-        if iv1 is not None and iv2 is not None:
-            if t1 == t2: iv30 = iv1
-            else:
-                w1, w2 = abs(t2 - 30) / float(span or 1), abs(30 - t1) / float(span or 1)
-                iv30 = (iv1 * w1) + (iv2 * w2)
+        if iv1 is None or iv2 is None or iv1 <= 0.0 or iv2 <= 0.0:
             return {
-                "constant_maturity_30d_iv": round(iv30, 4), "state": "CALCULATED",
-                "t1_dte": t1, "t2_dte": t2, "bracket_span_days": span, "bracket_quality": quality
+                "constant_maturity_30d_iv": None,
+                "state": "UNKNOWN",
+                "reason": "invalid_iv_sentinel_detected",
+                "t1_dte": t1,
+                "t2_dte": t2,
+                "bracket_span_days": span,
+                "bracket_quality": quality
             }
-        return {"state": "UNKNOWN", "reason": "insufficient_bracket_iv_data", "t1_dte": t1, "t2_dte": t2, "bracket_span_days": span, "bracket_quality": quality}
+
+        if t1 == t2:
+            iv30 = iv1
+        else:
+            w1, w2 = abs(t2 - 30) / float(span or 1), abs(30 - t1) / float(span or 1)
+            iv30 = (iv1 * w1) + (iv2 * w2)
+        return {
+            "constant_maturity_30d_iv": round(iv30, 4),
+            "state": "CALCULATED",
+            "t1_dte": t1,
+            "t2_dte": t2,
+            "bracket_span_days": span,
+            "bracket_quality": quality
+        }
 
     def _calc_skew_30d(self, df: pd.DataFrame, cmi_block: Dict[str, Any]) -> Dict[str, Any]:
         b_span = cmi_block.get("bracket_span_days")
@@ -327,8 +394,10 @@ class MasterThesisCalculator:
         dtes = sorted(list({int(d) for d in df["daysToExpiration"].dropna() if int(d) >= 0}))
         if not dtes:
             ret = {"state": "UNKNOWN", "reason": "no_valid_dte_for_skew", "skew_delta_anchor": "REJECTED_BEFORE_SELECTION", "skew_regime": "UNKNOWN"}
-            if b_span is not None: ret["bracket_span_days"] = b_span
-            if b_qual: ret["bracket_quality"] = b_qual
+            if b_span is not None:
+                ret["bracket_span_days"] = b_span
+            if b_qual:
+                ret["bracket_quality"] = b_qual
             return ret
         t_dte = min(dtes, key=lambda d: abs(d - 30))
         sub = df[df["daysToExpiration"] == t_dte]
@@ -336,8 +405,10 @@ class MasterThesisCalculator:
         calls = sub[sub["putCallIndicator"] == "CALL"].assign(d_diff=(sub["delta"].abs() - 0.25).abs())
         if puts.empty or calls.empty:
             ret = {"skew_tenor_dte": t_dte, "state": "UNKNOWN", "reason": "missing_wing_delta_contracts", "skew_delta_anchor": "REJECTED_BEFORE_SELECTION", "skew_regime": "UNKNOWN"}
-            if b_span is not None: ret["bracket_span_days"] = b_span
-            if b_qual: ret["bracket_quality"] = b_qual
+            if b_span is not None:
+                ret["bracket_span_days"] = b_span
+            if b_qual:
+                ret["bracket_quality"] = b_qual
             return ret
         p_row = puts.loc[puts["d_diff"].idxmin()]
         c_row = calls.loc[calls["d_diff"].idxmin()]
@@ -365,8 +436,10 @@ class MasterThesisCalculator:
                 "rejected_wing": rej_wing,
                 "cmi_bracket_ref": "constant_maturity_30d_iv"
             }
-            if b_span is not None: rej_dict["bracket_span_days"] = b_span
-            if b_qual: rej_dict["bracket_quality"] = b_qual
+            if b_span is not None:
+                rej_dict["bracket_span_days"] = b_span
+            if b_qual:
+                rej_dict["bracket_quality"] = b_qual
             return rej_dict
         diff = p_iv - c_iv if p_iv and c_iv else None
         p_d, c_d = safe_float(p_row.get("delta")), safe_float(c_row.get("delta"))
@@ -389,15 +462,18 @@ class MasterThesisCalculator:
             "spread_tolerance_source": "DEFAULT_EXECUTION_BOUNDARY",
             "state": "CALCULATED"
         }
-        if b_span is not None: ret["bracket_span_days"] = b_span
-        if b_qual: ret["bracket_quality"] = b_qual
+        if b_span is not None:
+            ret["bracket_span_days"] = b_span
+        if b_qual:
+            ret["bracket_quality"] = b_qual
         if not is_primary:
             ret["skew_anchor_reason"] = "PRIMARY_BAND_VIOLATED" if not (p_in_band and c_in_band) else "SYMMETRY_GAP_EXCEEDED"
         return ret
 
     def _calc_atm_straddle(self, df: pd.DataFrame) -> Dict[str, Any]:
         dtes = sorted(list({int(d) for d in df["daysToExpiration"].dropna() if int(d) >= 0}))
-        if not dtes: return {"state": "UNKNOWN", "reason": "no_valid_expirations"}
+        if not dtes:
+            return {"state": "UNKNOWN", "reason": "no_valid_expirations"}
         f_dte = dtes[0]
         sub = df[df["daysToExpiration"] == f_dte].assign(d_diff=(df["strikePrice"] - self.calc_spot).abs())
         atm_k = sub.loc[sub["d_diff"].idxmin(), "strikePrice"]
@@ -434,12 +510,20 @@ class MasterThesisCalculator:
                         pivots = {"state": "UNKNOWN", "reason": "candle_prices_non_positive"}
                 else:
                     pivots = {"state": "UNKNOWN", "reason": "candle_prices_non_positive"}
-                rv = self._calc_realized_vol_suite(clean_bars)
+
+                if (clean_bars["close"] <= 0.01).any() or (clean_bars["low"] <= 0.01).any():
+                    rv = {
+                        "state": "UNKNOWN",
+                        "reason": "sub_cent_zero_price_bars_unsuitable_for_diffusion_estimators"
+                    }
+                else:
+                    rv = self._calc_realized_vol_suite(clean_bars)
         return {"classical_floor_pivots": pivots, "realized_volatility": rv}
 
     def _calc_realized_vol_suite(self, df: pd.DataFrame) -> Dict[str, Any]:
         n = len(df)
-        if n < 2: return {"state": "UNKNOWN", "reason": "insufficient_bars_for_returns"}
+        if n < 2:
+            return {"state": "UNKNOWN", "reason": "insufficient_bars_for_returns"}
         res: Dict[str, Any] = {"state": "CALCULATED"}
         res["10d_tactical"] = self._calc_rv_horizon(df.tail(11), 10, min_bars=8)
         res["30d_intermediate"] = self._calc_rv_horizon(df.tail(31), 30, min_bars=20)
