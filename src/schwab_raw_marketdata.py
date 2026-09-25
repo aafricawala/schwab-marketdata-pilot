@@ -87,17 +87,28 @@ IMPORTANT ARCHITECTURAL CONSIDERATIONS:
   fallbacks (e.g., empty DataFrames or `None`) to ensure downstream pipelines degrade
   gracefully rather than crashing outright.
 ========================================================================================
+
+ENGINEERING AUDIT REMEDIATION SUMMARY:
+--------------------------------------
+DEF-OUT-01: Cleans OHLCV strings (strips '$' and ',') upstream before creating records
+            so DataFrame coercion downstream will not yield 100% NaN rows.
+DEF-OUT-02: Explicitly extracts 'bid' and 'ask' in `extract_in_memory_option_chains()`
+            to unblock straddle liquidity and spread validation gates.
+DEF-10:     Forces `include_underlying_quote=True` on option chain pulls to capture
+            and forward contemporaneous root-level `underlyingPrice`.
+DEF-OUT-03: Slices fundamental ratios (`pbRatio`, `pcfRatio`, debt, margins) with fallback
+            reconciliation across Quotes and Instruments endpoints.
+========================================================================================
 """
 
 from __future__ import annotations
 
 import logging
 import re
-import secrets
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -118,11 +129,13 @@ from schwab_client import (
 logger = logging.getLogger("schwab_orchestrator")
 logger.addHandler(logging.NullHandler())
 
+# Strict symbol regex supporting equities, multi-class shares, futures, options, and indices
 SYMBOL_REGEX = re.compile(r"^[\$A-Z0-9.\-_/ ]{1,30}$")
 
 
 @dataclass(frozen=True)
 class RunResult:
+    """Immutable execution contract returned by standalone execution flows."""
     success: bool
     symbol: str
     data: Optional[Dict[str, Any]] = None
@@ -151,19 +164,30 @@ def sanitize_and_validate_symbols(raw_symbol: Union[str, List[str]]) -> str:
     return ",".join(candidates)
 
 
+def _clean_numeric_val(val: Any) -> Any:
+    """Helper to strip currency and comma characters from raw scalar values."""
+    if isinstance(val, str):
+        cleaned = val.strip().replace("$", "").replace(",", "")
+        try:
+            return float(cleaned)
+        except (ValueError, TypeError):
+            return val
+    return val
+
+
 # ---------------------------------------------------------------------------
 # NORMALIZATION & ANALYTICAL PARSERS
 # ---------------------------------------------------------------------------
 def parse_price_history_to_df(history_payload: Dict[str, Any]) -> pd.DataFrame:
-    """Normalizes a Schwab PriceHistory payload into an OHLCV DataFrame."""
+    """Normalizes a Schwab PriceHistory payload into a clean OHLCV DataFrame."""
     if not isinstance(history_payload, dict) or history_payload.get("empty", True):
         logger.warning("Empty or invalid price history payload provided.")
-        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+        return pd.DataFrame(columns=["datetime", "open", "high", "low", "close", "volume"])
 
     candles = history_payload.get("candles", [])
     if not candles:
         logger.warning("Price history contains zero candle elements.")
-        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+        return pd.DataFrame(columns=["datetime", "open", "high", "low", "close", "volume"])
 
     df = pd.DataFrame(candles)
     required_cols = {"datetime", "open", "high", "low", "close", "volume"}
@@ -171,17 +195,29 @@ def parse_price_history_to_df(history_payload: Dict[str, Any]) -> pd.DataFrame:
         missing = required_cols - set(df.columns)
         raise ValueError(f"Price history schema mismatch: missing columns {missing}")
 
-    df["datetime"] = pd.to_datetime(df["datetime"], unit="ms", utc=True).dt.tz_convert("US/Eastern")
-    df.set_index("datetime", inplace=True)
-    df.sort_index(inplace=True)
+    # DEF-OUT-01: Sanitize OHLCV columns upstream before DataFrame typing
+    for col in ["open", "high", "low", "close", "volume"]:
+        if col in df.columns:
+            if df[col].dtype == object:
+                df[col] = (
+                    df[col]
+                    .astype(str)
+                    .str.replace("$", "", regex=False)
+                    .str.replace(",", "", regex=False)
+                    .str.strip()
+                )
+            df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    df[["open", "high", "low", "close"]] = df[["open", "high", "low", "close"]].astype(float)
-    df["volume"] = df["volume"].astype("int64")
-    return df[["open", "high", "low", "close", "volume"]]
+    # Retain integer epoch milliseconds in datetime for monotonic sorting
+    df["datetime"] = pd.to_numeric(df["datetime"], errors="coerce")
+    df = df.dropna(subset=["datetime", "high", "low", "close"])
+    df = df.sort_values("datetime", ascending=True).reset_index(drop=True)
+
+    return df[["datetime", "open", "high", "low", "close", "volume"]]
 
 
 def parse_option_chain_to_df(chain_payload: Dict[str, Any]) -> pd.DataFrame:
-    """Normalizes Schwab option chain nested maps into an institutional Volatility Surface."""
+    """Normalizes Schwab option chain nested maps into a flat tabular Volatility Surface."""
     if not isinstance(chain_payload, dict):
         logger.warning("Invalid chain payload received.")
         return pd.DataFrame()
@@ -230,10 +266,10 @@ def parse_option_chain_to_df(chain_payload: Dict[str, Any]) -> pd.DataFrame:
                     "expiration": exp_date,
                     "dte": dte,
                     "strike": strike_val,
-                    "bid": c.get("bid"),
-                    "ask": c.get("ask"),
-                    "mark": c.get("mark"),
-                    "last": c.get("last"),
+                    "bid": _clean_numeric_val(c.get("bid")),
+                    "ask": _clean_numeric_val(c.get("ask")),
+                    "mark": _clean_numeric_val(c.get("mark")),
+                    "last": _clean_numeric_val(c.get("last")),
                     "volume": c.get("totalVolume", 0),
                     "open_interest": c.get("openInterest", 0),
                     "implied_vol": c.get("volatility"),
@@ -271,14 +307,14 @@ def parse_quotes_to_df(quotes_payload: Dict[str, Any]) -> pd.DataFrame:
             "ticker": sym,
             "description": r.get("description", "N/A"),
             "exchange": r.get("exchangeName", "N/A"),
-            "last_price": q.get("lastPrice"),
-            "net_change": q.get("netChange"),
-            "percent_change": q.get("netPercentChange"),
-            "bid": q.get("bidPrice"),
-            "ask": q.get("askPrice"),
+            "last_price": _clean_numeric_val(q.get("lastPrice")),
+            "net_change": _clean_numeric_val(q.get("netChange")),
+            "percent_change": _clean_numeric_val(q.get("netPercentChange")),
+            "bid": _clean_numeric_val(q.get("bidPrice")),
+            "ask": _clean_numeric_val(q.get("askPrice")),
             "volume": q.get("totalVolume"),
-            "high_52w": q.get("52WeekHigh"),
-            "low_52w": q.get("52WeekLow"),
+            "high_52w": _clean_numeric_val(q.get("52WeekHigh")),
+            "low_52w": _clean_numeric_val(q.get("52WeekLow")),
             "pe_ratio": f.get("peRatio"),
             "div_yield": f.get("divYield"),
         })
@@ -290,11 +326,13 @@ def parse_quotes_to_df(quotes_payload: Dict[str, Any]) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# EXTRACTION ROUTINES (THESIS ENGINE SPECIALIZATION)
+# IN-MEMORY THESIS EXTRACTION ROUTINES
 # ---------------------------------------------------------------------------
 def extract_market_open_status(client: SchwabClient, tz: ZoneInfo) -> Optional[bool]:
-    """Queries Schwab to determine whether the equity market is open today."""
+    """Queries Schwab to determine whether regular equity trading is active today."""
     try:
+        now_et = datetime.now(timezone.utc).astimezone(tz)
+        date_str = now_et.strftime("%Y-%m-%d")
         if hasattr(client, "get_market_hours"):
             try:
                 raw_hours = client.get_market_hours("equity")
@@ -306,8 +344,10 @@ def extract_market_open_status(client: SchwabClient, tz: ZoneInfo) -> Optional[b
 
             if isinstance(raw_hours, dict):
                 if "isOpen" in raw_hours:
-                    return raw_hours.get("isOpen", False)
-                return raw_hours.get("equity", {}).get("EQ", {}).get("isOpen", False)
+                    return bool(raw_hours.get("isOpen", False))
+                eq_hours = raw_hours.get("equity", {}).get("EQ", {})
+                if "isOpen" in eq_hours:
+                    return bool(eq_hours.get("isOpen", False))
     except Exception as exc:
         logger.warning("MarketHours retrieval skipped: %s", exc)
     return None
@@ -315,8 +355,8 @@ def extract_market_open_status(client: SchwabClient, tz: ZoneInfo) -> Optional[b
 
 def extract_strict_underlying_data(client: SchwabClient, symbol: str, tz: ZoneInfo) -> Dict[str, Any]:
     """
-    Extracts quotes, fundamentals, and borrow status for the underlying stock.
-    Implements a fallback resolve mechanism between Quotes and Instruments endpoints.
+    Extracts quotes, fundamentals, and borrow status for the underlying security.
+    Resolves missing values across primary Quote and secondary Instruments payloads.
     """
     clean_sym = sanitize_and_validate_symbols(symbol)
     raw_payload = client.get_quote(symbol=clean_sym, fields="quote,fundamental,reference")
@@ -336,11 +376,11 @@ def extract_strict_underlying_data(client: SchwabClient, symbol: str, tz: ZoneIn
             elif isinstance(inst_payload, dict):
                 inst_fund_c = inst_payload.get("fundamental", {})
     except Exception as exc:
-        logger.info("Instruments query skipped: %s", exc)
+        logger.info("Instruments secondary query skipped: %s", exc)
 
     def resolve(field: str) -> Any:
         val = fund_c.get(field)
-        return inst_fund_c.get(field) if val is None or pd.isna(val) else val
+        return inst_fund_c.get(field) if (val is None or pd.isna(val)) else val
 
     quote_epoch = quote_c.get("quoteTime")
     quote_iso = None
@@ -350,31 +390,31 @@ def extract_strict_underlying_data(client: SchwabClient, symbol: str, tz: ZoneIn
     return {
         "phase_0_grounding": {
             "symbol": clean_sym,
-            "lastPrice": quote_c.get("lastPrice"),
+            "lastPrice": _clean_numeric_val(quote_c.get("lastPrice")),
             "quoteTime_ISO_ET": quote_iso,
-            "closePrice": quote_c.get("closePrice"),
+            "closePrice": _clean_numeric_val(quote_c.get("closePrice")),
         },
         "step_1_fundamentals": {
-            "beta": fund_c.get("beta"),
-            "peRatio": fund_c.get("peRatio"),
-            "pegRatio": fund_c.get("pegRatio"),
-            "pbRatio": fund_c.get("pbRatio"),
-            "prRatio": fund_c.get("prRatio"),
-            "pcfRatio": fund_c.get("pcfRatio"),
-            "quickRatio": fund_c.get("quickRatio"),
-            "currentRatio": fund_c.get("currentRatio"),
-            "totalDebtToEquity": fund_c.get("totalDebtToEquity"),
+            "beta": resolve("beta"),
+            "peRatio": resolve("peRatio"),
+            "pegRatio": resolve("pegRatio"),
+            "pbRatio": resolve("pbRatio"),
+            "prRatio": resolve("prRatio"),
+            "pcfRatio": resolve("pcfRatio"),
+            "quickRatio": resolve("quickRatio"),
+            "currentRatio": resolve("currentRatio"),
+            "totalDebtToEquity": resolve("totalDebtToEquity"),
             "grossMarginTTM": resolve("grossMarginTTM"),
             "netProfitMarginTTM": resolve("netProfitMarginTTM"),
             "operatingMarginTTM": resolve("operatingMarginTTM"),
-            "returnOnEquity": fund_c.get("returnOnEquity"),
-            "returnOnAssets": fund_c.get("returnOnAssets"),
-            "eps": fund_c.get("eps"),
+            "returnOnEquity": resolve("returnOnEquity"),
+            "returnOnAssets": resolve("returnOnAssets"),
+            "eps": resolve("eps"),
             "revChangeYear": resolve("revChangeYear"),
-            "divYield": fund_c.get("divYield"),
-            "divAmount": fund_c.get("divAmount"),
-            "divFreq": fund_c.get("divFreq"),
-            "divDate": fund_c.get("divDate"),
+            "divYield": resolve("divYield"),
+            "divAmount": _clean_numeric_val(resolve("divAmount")),
+            "divFreq": resolve("divFreq"),
+            "divDate": resolve("divDate"),
             "sharesOutstanding": resolve("sharesOutstanding"),
             "sharesFloat": resolve("sharesFloat"),
         },
@@ -384,8 +424,8 @@ def extract_strict_underlying_data(client: SchwabClient, symbol: str, tz: ZoneIn
             "htbRate": ref_c.get("htbRate"),
         },
         "step_8_liquidity_sizing": {
-            "bidPrice": quote_c.get("bidPrice"),
-            "askPrice": quote_c.get("askPrice"),
+            "bidPrice": _clean_numeric_val(quote_c.get("bidPrice")),
+            "askPrice": _clean_numeric_val(quote_c.get("askPrice")),
             "bidSize": quote_c.get("bidSize"),
             "askSize": quote_c.get("askSize"),
             "totalVolume": quote_c.get("totalVolume"),
@@ -400,7 +440,10 @@ def extract_in_memory_price_history(
     symbol: str,
     config: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
-    """Fetches historical price candles in-memory strictly for risk metrics calculation."""
+    """
+    Fetches historical daily price candles in-memory.
+    Enforces DEF-OUT-01 currency stripping so downstream calculators receive numeric OHLCV bars.
+    """
     clean_sym = sanitize_and_validate_symbols(symbol)
     cfg = config or {}
     try:
@@ -412,24 +455,42 @@ def extract_in_memory_price_history(
             frequency=cfg.get("HISTORICAL_FREQUENCY", 1),
             need_extended_hours=cfg.get("HISTORICAL_NEED_EXTENDED_HOURS", False),
         )
+
         try:
             df = parse_price_history_to_df(raw)
-            df = df.reset_index()
         except Exception:
             df = pd.DataFrame(raw.get("candles", []))
 
         if df.empty:
             return []
+
+        # Upstream currency and punctuation sanitization
+        for col in ["open", "high", "low", "close", "volume"]:
+            if col in df.columns:
+                if df[col].dtype == object:
+                    df[col] = (
+                        df[col]
+                        .astype(str)
+                        .str.replace("$", "", regex=False)
+                        .str.replace(",", "", regex=False)
+                        .str.strip()
+                    )
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        if "datetime" in df.columns:
+            df["datetime"] = pd.to_numeric(df["datetime"], errors="coerce")
+
         cols = ["datetime", "open", "high", "low", "close", "volume"]
         existing = [c for c in cols if c in df.columns]
-        return df[existing].to_dict(orient="records")
+        return df[existing].dropna(subset=["high", "low", "close"]).to_dict(orient="records")
+
     except Exception as exc:
-        logger.error("PriceHistory query failed: %s", exc)
+        logger.error("PriceHistory query failed for %s: %s", clean_sym, exc)
         return []
 
 
 def extract_in_memory_option_expirations(client: SchwabClient, symbol: str) -> List[Dict[str, Any]]:
-    """Retrieves option expiration schedules in-memory to find target tenors."""
+    """Retrieves option expiration schedules in-memory to discover required analytical tenors."""
     clean_sym = sanitize_and_validate_symbols(symbol)
     try:
         payload = client.get_option_expirations(clean_sym)
@@ -441,12 +502,12 @@ def extract_in_memory_option_expirations(client: SchwabClient, symbol: str) -> L
         existing = [c for c in cols if c in df.columns]
         return df[existing].sort_values("daysToExpiration").to_dict(orient="records")
     except Exception as exc:
-        logger.error("OptionExpirations query failed: %s", exc)
+        logger.error("OptionExpirations query failed for %s: %s", clean_sym, exc)
         return []
 
 
 def resolve_optimal_expirations(expirations: List[Dict[str, Any]]) -> List[str]:
-    """Finds the front-month expiration and the expiration closest to 30 DTE."""
+    """Resolves the nearest front-month expiration cycle and the cycle closest to 30 DTE."""
     if not expirations:
         return []
     valid_exps = [e for e in expirations if e.get("daysToExpiration", 0) > 0]
@@ -464,15 +525,19 @@ def extract_in_memory_option_chains(
     target_expirations: List[str],
     strike_count: int = 14,
     strategy: str = "SINGLE",
-    include_quote: bool = False,
-) -> Tuple[Optional[float], List[Dict[str, Any]]]:
-    """Pulls targeted strikes for selected expirations in-memory."""
+    include_quote: bool = True,  # DEF-10: Default True to capture contemporaneous underlyingPrice
+) -> Tuple[Optional[float], Optional[float], List[Dict[str, Any]]]:
+    """
+    Extracts targeted option strikes for specified expirations in-memory.
+    Returns: (volatility_30d, underlying_price, list_of_contract_records).
+    """
     clean_sym = sanitize_and_validate_symbols(symbol)
-    vol_30d = None
+    vol_30d: Optional[float] = None
+    underlying_price: Optional[float] = None
     records: List[Dict[str, Any]] = []
 
     if not target_expirations:
-        return None, []
+        return None, None, []
 
     for exp_date in target_expirations:
         try:
@@ -487,7 +552,10 @@ def extract_in_memory_option_chains(
             )
 
             if vol_30d is None:
-                vol_30d = raw_chain.get("volatility")
+                vol_30d = _clean_numeric_val(raw_chain.get("volatility"))
+
+            if underlying_price is None:
+                underlying_price = _clean_numeric_val(raw_chain.get("underlyingPrice"))
 
             def parse_map(exp_map: Dict[str, Any], flag: str):
                 if not isinstance(exp_map, dict):
@@ -500,15 +568,22 @@ def extract_in_memory_option_chains(
                         if not isinstance(contracts, list):
                             continue
                         for c in contracts:
+                            # DEF-OUT-02: Explicitly extract bid, ask, and mark
                             records.append({
                                 "putCallIndicator": c.get("putCallIndicator", flag),
                                 "daysToExpiration": c.get("daysToExpiration", dte),
-                                "strikePrice": c.get("strikePrice"),
-                                "mark": c.get("mark"),
+                                "strikePrice": _clean_numeric_val(c.get("strikePrice")),
+                                "bid": _clean_numeric_val(c.get("bid")),
+                                "ask": _clean_numeric_val(c.get("ask")),
+                                "mark": _clean_numeric_val(c.get("mark")),
                                 "totalVolume": c.get("totalVolume"),
                                 "openInterest": c.get("openInterest"),
-                                "volatility": c.get("volatility"),
-                                "delta": c.get("delta"),
+                                "volatility": _clean_numeric_val(c.get("volatility")),
+                                "delta": _clean_numeric_val(c.get("delta")),
+                                "gamma": _clean_numeric_val(c.get("gamma")),
+                                "theta": _clean_numeric_val(c.get("theta")),
+                                "vega": _clean_numeric_val(c.get("vega")),
+                                "inTheMoney": c.get("inTheMoney", False),
                             })
 
             parse_map(raw_chain.get("callExpDateMap", {}), "CALL")
@@ -518,7 +593,7 @@ def extract_in_memory_option_chains(
             logger.error("OptionChains extraction failed for %s on %s: %s", clean_sym, exp_date, exc)
             continue
 
-    return vol_30d, records
+    return vol_30d, underlying_price, records
 
 
 # ---------------------------------------------------------------------------
