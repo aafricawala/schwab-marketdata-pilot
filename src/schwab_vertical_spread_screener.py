@@ -1,18 +1,84 @@
 """
-optimal_vertical_debit_spread_options.py
-==============================================================================
-Institutional Vertical Debit Spread Screener & Quantitative Analytics Engine.
-Reuses authentication, credential resolution, and path isolation primitives
-from `marketdata_pilot.py` and `schwab_client.py`.
+schwab_vertical_spread_screener.py
+========================================================================================
+CHARLES SCHWAB VERTICAL DEBIT SPREAD SCREENER & QUANTITATIVE ANALYTICS ENGINE
+========================================================================================
 
-Key Edge-Case Protections:
-  - Inverted or parity strike combinations (k_long >= k_short for calls).
-  - Negative or zero net debit quotes (credit anomalies / data gaps).
-  - Debit exceeding spread width (immediate negative expectancy).
-  - Missing Greek surfaces (deep OTM/ITM contract normalization).
-  - Illiquid bid-ask crossing (midpoint vs. natural execution modeling).
-  - Missing or zero spot prices with automated multi-endpoint fallback.
-==============================================================================
+WHAT THIS SCRIPT DOES:
+----------------------
+This module screens, prices, and evaluates vertical debit option spreads (Bull Call Spreads
+and Bear Put Spreads) for a target equity ticker at a specified expiration date.
+
+It takes candidate strike price combinations (long legs vs. short legs), retrieves live
+option chains from the Charles Schwab API, and calculates institutional risk metrics:
+- Net debit pricing (both synthetic midpoint mark and natural execution ask-bid crossing).
+- Cost-to-width capital efficiency percentage (flagging trades that meet risk hurdle gates).
+- Breakeven prices and percentage distance hurdles from the current underlying spot price.
+- Maximum profit per share and theoretical maximum Return on Capital (ROC%).
+- Net position Greeks (Delta, Theta, Vega, Gamma).
+- Automatic sorting and ranking by ascending cost-to-width ratio.
+
+WHEN AND HOW IT GETS CALLED:
+----------------------------
+1. Standalone CLI Tool:
+   Run from the terminal or shell prompt to evaluate candidate spreads on demand:
+     $ python schwab_vertical_spread_screener.py \
+         --symbol GOOGL \
+         --expiration 2028-01-21 \
+         --long-strikes 280 290 300 \
+         --short-strikes 430 440 450 \
+         --strategy-type CALL \
+         --cost-to-width-max 40.0 \
+         --out googl_spreads.json
+
+2. Programmatic Python / Colab Notebook Runner:
+   Imported by screening notebooks or automated trade scanners:
+     from schwab_vertical_spread_screener import evaluate_vertical_spreads
+     results = evaluate_vertical_spreads(
+         symbol="GOOGL",
+         expiration="2028-01-21",
+         long_strikes=[280.0, 290.0, 300.0],
+         short_strikes=[430.0, 440.0, 450.0],
+         strategy_type="CALL",
+         cost_to_width_pass_pct=40.0,
+     )
+
+KEY FUNCTIONS AND HIGH-LEVEL RESPONSIBILITIES:
+---------------------------------------------
+1. evaluate_vertical_spreads(...):
+   - The primary analytics engine of this module.
+   - Validates ticker symbols and filters strike arrays to ensure positive, unique values.
+   - Reuses `build_schwab_client()` from `schwab_auth` to acquire an active API session.
+   - Queries `get_option_chain()` using dynamic signature inspection to support both
+     snake_case and camelCase parameters across API wrapper versions.
+   - Implements multi-tier spot price resolution (underlying block in chain -> chain root
+     spot -> fallback quote query) to ensure moneyness and breakevens can always be solved.
+   - Normalizes contract data (mark price fallbacks, Greek rounding, volume, and open interest).
+   - Iterates through long and short strike combinations, rejecting invalid pairings:
+       * Bull Call Spreads: Requires Long Strike < Short Strike.
+       * Bear Put Spreads: Requires Long Strike > Short Strike.
+       * Edge-case guards: Discards net credits, inverted parity pricing, and spreads
+         where the net debit exceeds the gross spread width (guaranteed loss).
+   - Computes capital efficiency, maximum return, breakeven distance, and netted Greeks.
+   - Returns a structured dictionary containing ticker metadata, spot details, target DTE,
+     extracted contract legs, and ranked spread evaluations.
+
+2. _build_arg_parser() & main():
+   - Configures CLI arguments (--symbol, --expiration, --long-strikes, --short-strikes,
+     --cost-to-width-max, --strategy-type, --out, etc.).
+   - Orchestrates CLI execution, optionally writes structured JSON output to disk, and
+     prints formatted results to stdout.
+
+EDGE-CASE PROTECTIONS & INSTITUTIONAL SAFEGUARDS:
+------------------------------------------------
+- Inverted / Parity Strike Guards: Discards pairings that violate directional spread geometry.
+- Net Debit / Arbitrage Sanity: Rejects free/credit quotes or debit >= width quotes that indicate
+  bad ticks, stale books, or guaranteed negative mathematical expectancy.
+- Mark Price Fallbacks: If Schwab omits `mark`, defaults to synthetic midpoint `(bid + ask) / 2`,
+  falling back to `last` if quotes are completely unpopulated.
+- Decoupled Infrastructure: Consumes authentication from `schwab_auth` and symbol validation
+  from `schwab_raw_marketdata`, avoiding duplicated session logic and preventing path pollution.
+========================================================================================
 """
 
 from __future__ import annotations
@@ -21,7 +87,6 @@ import argparse
 import inspect
 import json
 import logging
-import os
 from pathlib import Path
 import sys
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
@@ -29,144 +94,42 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 # ------------------------------------------------------------------------------
 # 1. Workspace Path Alignment & Module Imports
 # ------------------------------------------------------------------------------
-WORKSPACE_DIR = Path("/content") if Path("/content").exists() else Path.cwd()
-if str(WORKSPACE_DIR) not in sys.path:
-    sys.path.insert(0, str(WORKSPACE_DIR))
+PROJECT_SRC = (
+    Path(__file__).resolve().parent
+    if "__file__" in locals()
+    else Path("/content/schwab-marketdata-pilot/src")
+)
+if str(PROJECT_SRC) not in sys.path:
+    sys.path.insert(0, str(PROJECT_SRC))
 
 logger = logging.getLogger("VerticalSpreadEngine")
 logger.addHandler(logging.NullHandler())
 
-# Import core primitives directly from marketdata_pilot and schwab_client
 try:
-    import marketdata_pilot as pilot
-    from marketdata_pilot import (
+    from schwab_auth import (
         CredentialResolutionError,
         OrchestratorError,
+        build_schwab_client,
         resolve_secure_token_path,
     )
+    from schwab_raw_marketdata import sanitize_and_validate_symbols
 except ImportError as err:
     raise ImportError(
-        f"FATAL: Unable to load 'marketdata_pilot.py' from '{WORKSPACE_DIR}'. "
-        f"Ensure the module is in your Python path. Detail: {err}"
+        f"FATAL: Unable to load modules from '{PROJECT_SRC}'. "
+        f"Ensure schwab_auth.py and schwab_raw_marketdata.py are present. Detail: {err}"
     ) from err
 
 try:
-    from schwab_client import (
-        APIRequestError,
-        CallbackURLError,
-        SchwabClient,
-        SchwabClientError,
-        TokenError,
-    )
+    from schwab_client import SchwabClient
 except ImportError as err:
     raise ImportError(
-        f"FATAL: Unable to load 'schwab_client.py' from '{WORKSPACE_DIR}'. "
+        f"FATAL: Unable to load 'schwab_client.py' from '{PROJECT_SRC}'. "
         f"Ensure the module is in your Python path. Detail: {err}"
     ) from err
 
 
 # ------------------------------------------------------------------------------
-# 2. Defensive Client & Session Factory (Reusing Orchestrator Logic)
-# ------------------------------------------------------------------------------
-def get_authenticated_schwab_client(
-    client_id: Optional[str] = None,
-    client_secret: Optional[str] = None,
-    redirect_uri: Optional[str] = None,
-    token_path: Optional[Union[Path, str]] = None,
-    interactive: bool = True,
-    force_reauth: bool = False,
-    secret_provider: Optional[Callable[[str], Optional[str]]] = None,
-) -> SchwabClient:
-    """
-    Initializes a SchwabClient instance reusing marketdata_pilot's secure storage,
-    credential hierarchy, and dual-tier OAuth recovery flow.
-    """
-    # Reuse isolated token path resolution from marketdata_pilot
-    resolved_token_path = (
-        Path(token_path).resolve()
-        if token_path
-        else resolve_secure_token_path()
-    )
-
-    # Cache eviction boundary on explicit re-authentication
-    if force_reauth and resolved_token_path.exists():
-        logger.info("force_reauth=True: Evicting cached token at %s", resolved_token_path)
-        try:
-            resolved_token_path.unlink()
-        except OSError as exc:
-            logger.warning("Failed to evict cached token file: %s", exc)
-
-    # Reuse credential resolution from marketdata_pilot
-    resolve_fn = getattr(pilot, "_resolve_credential", None) or getattr(pilot, "resolve_credential", None)
-    if not resolve_fn:
-        raise OrchestratorError("Could not locate credential resolver in marketdata_pilot.py")
-
-    c_id = client_id or resolve_fn(
-        "SCHWAB_CLIENT_ID",
-        "Enter Schwab Client ID (App Key)",
-        is_secret=False,
-        interactive=interactive,
-        secret_provider=secret_provider,
-    )
-    c_sec = client_secret or resolve_fn(
-        "SCHWAB_CLIENT_SECRET",
-        "Enter Schwab Client Secret",
-        is_secret=True,
-        interactive=interactive,
-        secret_provider=secret_provider,
-    )
-    red_uri = redirect_uri or os.environ.get("SCHWAB_REDIRECT_URI", "https://127.0.0.1")
-
-    client = SchwabClient(
-        client_id=c_id,
-        client_secret=c_sec,
-        redirect_uri=red_uri,
-        token_file_path=resolved_token_path,
-    )
-
-    # Fast-path: validate existing token session
-    if not force_reauth:
-        try:
-            client.get_valid_access_token()
-            logger.info("Active token session validated successfully.")
-            return client
-        except TokenError as te:
-            logger.info("Cached token expired/missing (%s). Transitioning to OAuth restart.", te)
-
-    # Interactive OAuth fallback
-    if not interactive:
-        raise OrchestratorError(
-            "Authentication session expired and interactive authentication is disabled."
-        )
-
-    import secrets
-
-    session_state = secrets.token_urlsafe(16)
-    auth_url = client.build_auth_url(state=session_state)
-
-    print("\n" + "=" * 80)
-    print("SCHWAB OAUTH CONSENT FLOW REQUIRED")
-    print("=" * 80)
-    print("1. Open the URL in your browser and log in to authorize the app:\n")
-    print(auth_url)
-    print("\n2. Paste the full redirected URL from your browser address bar below.")
-    print("-" * 80)
-
-    auth_code = input("Paste Full Redirect Callback URL: ").strip()
-    if not auth_code:
-        raise CredentialResolutionError("OAuth callback input was empty. Authentication aborted.")
-
-    try:
-        client.exchange_code_for_token(auth_code, expected_state=session_state)
-        logger.info("OAuth handshake completed successfully. Bearer token saved.")
-    except (CallbackURLError, TokenError, APIRequestError) as oauth_err:
-        raise OrchestratorError(f"OAuth Handshake Failure: {oauth_err}") from oauth_err
-
-    return client
-
-
-# ------------------------------------------------------------------------------
-# 3. Market Data & Spread Analytics Engine
+# 2. Market Data & Spread Analytics Engine
 # ------------------------------------------------------------------------------
 def evaluate_vertical_spreads(
     symbol: str,
@@ -189,13 +152,7 @@ def evaluate_vertical_spreads(
     Evaluates vertical debit spreads over target strike sets and expiration dates.
     Integrates defensive quote extraction, Greek netting, and institutional efficiency gates.
     """
-    # Defensive Symbol Validation using marketdata_pilot sanitizer
-    sanitize_fn = getattr(pilot, "_sanitize_and_validate_symbols", None) or getattr(pilot, "_sanitize_and_validate_symbol", None)
-    if sanitize_fn:
-        clean_res = sanitize_fn(symbol)
-        target_symbol = clean_res[0] if isinstance(clean_res, list) else str(clean_res)
-    else:
-        target_symbol = symbol.strip().upper()
+    target_symbol = sanitize_and_validate_symbols(symbol)
 
     strat_type = strategy_type.strip().upper()
     if strat_type not in {"CALL", "PUT"}:
@@ -210,14 +167,10 @@ def evaluate_vertical_spreads(
 
     required_strikes = sorted(list(set(sorted_longs + sorted_shorts)))
 
-    # Acquire or initialize API client
-    managed_client = client or get_authenticated_schwab_client(
-        client_id=client_id,
-        client_secret=client_secret,
-        redirect_uri=redirect_uri,
-        token_path=token_path,
+    # Acquire or initialize API client via standard schwab_auth factory
+    managed_client = client or build_schwab_client(
+        token_file_path=token_path,
         interactive=interactive,
-        force_reauth=force_reauth,
         secret_provider=secret_provider,
     )
 
@@ -447,7 +400,7 @@ def evaluate_vertical_spreads(
 
 
 # ------------------------------------------------------------------------------
-# 4. CLI Execution Interface
+# 3. CLI Execution Interface
 # ------------------------------------------------------------------------------
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(

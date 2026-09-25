@@ -1,24 +1,79 @@
 """
 schwab_schema_catalog.py
------------------------------------------------------------------------------
-Institutional Data Dictionary & Schema Catalog for Schwab Market Data REST APIs.
+========================================================================================
+CHARLES SCHWAB MARKET DATA REST API DATA DICTIONARY & SCHEMA CATALOG
+========================================================================================
 
-Scope:
-  Catalogs the full OpenAPI specification parameters across all 7 endpoint families:
-    1. Quotes (/quotes)
-    2. Price History (/pricehistory)
-    3. Option Chains (/chains)
-    4. Option Expirations (/expirationchain)
-    5. Instruments (/instruments)
-    6. Movers (/movers/{index_symbol})
-    7. Market Hours (/markets)
+WHAT THIS SCRIPT DOES:
+----------------------
+This module serves as an offline, zero-network reference manual and interactive data
+dictionary covering all 7 endpoint families of the Charles Schwab Market Data REST API:
+  1. Quotes (/quotes)
+  2. Price History (/pricehistory)
+  3. Option Chains (/chains)
+  4. Option Expirations (/expirationchain)
+  5. Instruments (/instruments)
+  6. Movers (/movers/{index_symbol})
+  7. Market Hours (/markets)
 
-Features:
-  - Zero Network Dependencies: Requires no API keys or live requests.
-  - Full Tabular Mapping: Maps JSON keys, parent containers, data types,
-    semantic definitions, and institutional quant/risk use cases.
-  - Interactive Filtering: Inspect by endpoint or export to pandas DataFrame.
------------------------------------------------------------------------------
+It maps JSON payload keys, parent containers, standard data types, financial definitions,
+and specific quantitative/risk-management use cases for every documented parameter.
+
+WHEN AND HOW IT GETS CALLED:
+----------------------------
+1. Standalone CLI Utility:
+   Executed from the terminal to inspect schemas, search for financial indicators,
+   or export the complete API dictionary to CSV:
+     - Print full dictionary:
+       $ python schwab_schema_catalog.py
+     - Filter by a specific endpoint family:
+       $ python schwab_schema_catalog.py --endpoint OptionChains
+     - Search across fields, definitions, and quant applications:
+       $ python schwab_schema_catalog.py --search volatility
+     - Export to CSV for documentation or model specifications:
+       $ python schwab_schema_catalog.py --export-csv schwab_schema.csv
+
+2. In-Notebook or Programmatic Data Dictionary:
+   Imported by external modeling or ETL scripts to programmatically inspect expected
+   keys, validate schemas, or map incoming Schwab API payloads to internal dataframes.
+
+KEY CONSTANTS & CLASSES AND HIGH-LEVEL RESPONSIBILITIES:
+-------------------------------------------------------
+1. SCHEMA_REGISTRY (Constant List[Dict[str, str]]):
+   - The authoritative offline catalog containing tabular records for every key field.
+   - Each entry defines:
+       * 'endpoint': Target endpoint family (e.g., 'Quotes', 'OptionChains').
+       * 'container': Parent JSON key/dictionary level (e.g., 'quote', 'fundamental').
+       * 'field': Exact JSON property name returned by the Schwab gateway.
+       * 'data_type': Expected data primitive (e.g., 'float', 'int', 'bool', 'str').
+       * 'description': Plain-English semantic meaning of the field.
+       * 'risk_quant_application': Institutional context (e.g., Fama-French factor modeling,
+         Black-Scholes IV surface calibration, circuit-breaker monitoring).
+
+2. SchwabSchemaCatalog (Core Class):
+   - Manages and queries the schema registry using an internal pandas DataFrame.
+   - Key Methods:
+       * catalog_df: Property returning the full schema registry as a DataFrame.
+       * list_endpoints(): Lists all distinct documented endpoint families.
+       * get_endpoint_schema(endpoint_name): Returns parameters for a specific family.
+       * search_parameters(query): Free-text substring search across field names,
+         definitions, and financial/risk applications.
+       * display(endpoint_name=None, max_colwidth=50): Renders formatted tabular
+         terminal outputs using pandas display options.
+
+3. _build_arg_parser() & main(argv=None):
+   - Handles CLI argument parsing (--endpoint, --search, --export-csv).
+   - Directs execution to terminal printing, searches, or disk export, returning standard
+     POSIX exit codes.
+
+IMPORTANT ARCHITECTURAL CONSIDERATIONS:
+---------------------------------------
+- Zero Network Dependencies: Requires no API keys, OAuth tokens, internet access,
+  or Schwab credentials to run.
+- Pure Documentation & Schema Grounding: Provides developers and quantitative models
+  with an exact reference point for JSON payload structures, preventing field-name
+  drift and misidentified schema attributes across the pipeline.
+========================================================================================
 """
 
 from __future__ import annotations
