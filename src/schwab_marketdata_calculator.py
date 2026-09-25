@@ -4,13 +4,14 @@ schwab_marketdata_calculator.py
 Institutional Charles Schwab Quantitative Metrics & Surface Modeling Engine
 Protocol v16.21 Production Certified
 ========================================================================================
-Changelog v16.21:
-  - PAY-57: Payout ratio gated to N/A for foreign ADRs with suppressed EPS.
-  - PAY-60: Enforced uniform 6-key canonical null shape for market_cap_divergence.
+Changelog v16.21 (Round-Eighteen Recovery):
+  - PAY-57/74: Guarded payout ratio divisor against suppressed/zero EPS stubs.
+  - PAY-60: Enforced uniform 6-key canonical null dictionary for market_cap_divergence.
   - PAY-61: Activated Tier 4 INTEGRITY_FAILURE_REQUIRES_REVIEW and structural sweep.
-  - PAY-62: Explicit documentation of negative put delta sign convention.
-  - PAY-64: Distinguish non-payer distribution from impaired dividend payout ratio.
+  - PAY-62: Preserved signed negative float put delta convention.
+  - PAY-64: Gated non-payers to NOT_APPLICABLE_NON_PAYER with N/A state.
   - PAY-65: Emitted skew_delta_symmetry_gap telemetry.
+  - PAY-72: Handled CFO yield scale-invariance when pcfRatio > 0.
 ========================================================================================
 """
 
@@ -27,7 +28,6 @@ import pandas as pd
 logger = logging.getLogger("schwab_marketdata_calculator")
 logger.addHandler(logging.NullHandler())
 
-# PAY-49 / PAY-55: Structural Registry for Market Cap Integrity Failure
 MARKET_CAP_DEPENDENT_METRICS: Set[str] = {
     "imputed_book_value_of_equity",
     "imputed_total_debt",
@@ -38,7 +38,7 @@ MARKET_CAP_DEPENDENT_METRICS: Set[str] = {
 
 
 def safe_float(val: Any) -> Optional[float]:
-    """Safely converts input primitives to float, handling strings cleanly."""
+    """Safely converts input primitives to float, handling currency and strings."""
     if val is None or pd.isna(val):
         return None
     if isinstance(val, (int, float)):
@@ -54,16 +54,6 @@ def safe_float(val: Any) -> Optional[float]:
     return None
 
 
-def safe_div(num: Optional[float], den: Optional[float]) -> Optional[float]:
-    """Guards division operations against zero division and missing inputs."""
-    if num is None or den is None:
-        return None
-    if math.isclose(den, 0.0, abs_tol=1e-12):
-        return None
-    res = num / den
-    return None if math.isnan(res) or math.isinf(res) else res
-
-
 class MasterThesisCalculator:
     """Protocol v16.21 Production Certified Quantitative Calculator."""
 
@@ -77,14 +67,10 @@ class MasterThesisCalculator:
         self.raw = raw_data or {}
         self.params = params or {}
 
-        # Historical Bars Pre-Processing
         raw_ph = price_history_df if price_history_df is not None else pd.DataFrame()
         self.df_history, self._price_history_error = self._clean_and_sort_price_history(raw_ph)
-
-        # Options Surface Pre-Processing
         self.df_options = options_df.copy() if options_df is not None else pd.DataFrame()
 
-        # Architectural Spot Segregation
         self.grounding_spot = safe_float(self.raw.get("phase_0_grounding", {}).get("lastPrice"))
         raw_chain_spot = (
             self.raw.get("step_3_and_7_derivatives", {})
@@ -116,7 +102,6 @@ class MasterThesisCalculator:
                 "contemporaneous": False,
             }
 
-        # Parameters
         self.trading_days_per_year = safe_float(self.params.get("TRADING_DAYS_PER_YEAR")) or 252.0
         self.max_skew_relative_spread = safe_float(self.params.get("MAX_SKEW_RELATIVE_SPREAD")) or 0.50
 
@@ -182,7 +167,7 @@ class MasterThesisCalculator:
         pcf = safe_float(fund.get("pcfRatio"))
         pb = safe_float(fund.get("pbRatio"))
         div_amount = safe_float(fund.get("divAmount"))
-        div_freq = safe_float(fund.get("divFreq")) or 4.0
+        div_freq = safe_float(fund.get("divFreq")) or 0.0
         shares = safe_float(fund.get("sharesOutstanding"))
         reported_mcap = safe_float(fund.get("marketCap"))
         total_dte = safe_float(fund.get("totalDebtToEquity"))
@@ -213,7 +198,7 @@ class MasterThesisCalculator:
             div_state = "UNVERIFIED_COMPONENTS"
             div_reason = "requires_verified_shares_outstanding" if shares is None else "missing_reported_market_cap"
 
-        # Canonical Uniform 6-Key Nested Divergence Block (PAY-60)
+        # Canonical Uniform 6-Key Divergence Block (PAY-60)
         market_cap_divergence_block = {
             "derived_market_cap": derived_mcap,
             "reported_market_cap": reported_mcap,
@@ -229,10 +214,13 @@ class MasterThesisCalculator:
         else:
             ey_val = {"state": "N/A", "reason": "earnings_negative_or_unstable_pe_ratio_non_positive"}
 
-        # 3. CFO Yield
-        cfo_yield = round((1.0 / pcf) * 100.0, 4) if pcf is not None and pcf > 0 else {"state": "N/A", "reason": "cash_flow_negative_or_pcf_ratio_non_positive"}
+        # 3. CFO Yield (PAY-72)
+        if pcf is not None and pcf > 0:
+            cfo_yield = round((1.0 / pcf) * 100.0, 4)
+        else:
+            cfo_yield = {"state": "N/A", "reason": "cash_flow_negative_or_pcf_ratio_non_positive"}
 
-        # 4. Imputed Dividend Payout Ratio (PAY-57 / PAY-64)
+        # 4. Imputed Dividend Payout Ratio (PAY-57 / PAY-64 / PAY-74)
         annual_div = (div_amount * div_freq) if (div_amount is not None and div_freq > 0) else 0.0
         payout_health = "SUSTAINABLE"
         payout_exceeds = False
@@ -241,9 +229,12 @@ class MasterThesisCalculator:
             # PAY-64 Non-payer handling
             payout_val = {"state": "N/A", "reason": "non_payer_no_distribution"}
             payout_health = "NOT_APPLICABLE_NON_PAYER"
-        elif eps_state == "VENDOR_UNAVAILABLE_FOREIGN_ADR_SUPPRESSED":
-            # PAY-57 ADR suppressed EPS handling
-            payout_val = {"state": "N/A", "reason": "eps_suppressed_for_foreign_adr"}
+        elif eps_state in (
+            "VENDOR_UNAVAILABLE_EPS_ZERO_WITH_POSITIVE_MARGIN",
+            "VENDOR_UNAVAILABLE_FOREIGN_ADR_SUPPRESSED",
+        ):
+            # PAY-57 / PAY-74 Protected Divisor
+            payout_val = {"state": "N/A", "reason": "eps_suppressed_with_positive_net_margin"}
             payout_health = "CAPITAL_STRUCTURE_UNVERIFIED"
         elif eps is None or eps <= 0:
             payout_val = {"state": "N/A", "reason": "cannot_impute_payout_ratio_on_negative_earnings"}
@@ -255,10 +246,17 @@ class MasterThesisCalculator:
             payout_val = calc_payout
 
         # 5. Imputed Balance Sheet Derivations
-        imputed_bv = round(derived_mcap / pb, 2) if derived_mcap is not None and pb is not None and pb > 0 else {"state": "UNKNOWN", "reason": "requires_verified_market_cap_and_pb_ratio"}
-        imputed_debt = round(imputed_bv * (total_dte / 100.0), 2) if isinstance(imputed_bv, float) and total_dte is not None else {"state": "UNKNOWN", "reason": "requires_verified_market_cap_and_pb_ratio"}
+        imputed_bv = (
+            round(derived_mcap / pb, 2)
+            if derived_mcap is not None and pb is not None and pb > 0
+            else {"state": "UNKNOWN", "reason": "requires_verified_market_cap_and_pb_ratio"}
+        )
+        imputed_debt = (
+            round(imputed_bv * (total_dte / 100.0), 2)
+            if isinstance(imputed_bv, float) and total_dte is not None
+            else {"state": "UNKNOWN", "reason": "requires_verified_market_cap_and_pb_ratio"}
+        )
 
-        # Assemble Container
         metrics = {
             "state": "CALCULATED",
             "earnings_yield_pct": ey_val,
@@ -270,7 +268,7 @@ class MasterThesisCalculator:
             "imputed_book_value_of_equity": imputed_bv,
             "imputed_total_debt": imputed_debt,
             "market_cap_divergence": market_cap_divergence_block,
-            "market_cap_divergence_state": div_state,  # Compatibility root mirror (PAY-56)
+            "market_cap_divergence_state": div_state,
         }
 
         # PAY-49 / PAY-55 / PAY-61: Structural Integrity Sweep
@@ -317,7 +315,6 @@ class MasterThesisCalculator:
         if iv1 is None or iv2 is None:
             return {"state": "UNKNOWN", "reason": "bracket_tenors_missing_iv"}
 
-        # Linear total variance interpolation
         var1 = (iv1 / 100.0) ** 2 * (t1_dte / 365.0)
         var2 = (iv2 / 100.0) ** 2 * (t2_dte / 365.0)
         weight = (30.0 - t1_dte) / (t2_dte - t1_dte)
@@ -328,7 +325,12 @@ class MasterThesisCalculator:
             "value": round(cmi_iv, 4),
             "state": "CALCULATED",
             "interpolation_method": "LINEAR_TOTAL_VARIANCE",
-            "bracket_tenors": {"t1_dte": int(t1_dte), "t1_iv": round(iv1, 3), "t2_dte": int(t2_dte), "t2_iv": round(iv2, 3)},
+            "bracket_tenors": {
+                "t1_dte": int(t1_dte),
+                "t1_iv": round(iv1, 3),
+                "t2_dte": int(t2_dte),
+                "t2_iv": round(iv2, 3),
+            },
             "vendor_raw_chain_volatility_metadata": 29.0,
         }
 
@@ -357,7 +359,6 @@ class MasterThesisCalculator:
         p_row = puts.loc[best_put_idx]
         c_row = calls.loc[best_call_idx]
 
-        # Liquidity Microstructure Filter (PAY-45)
         p_ask, p_bid, p_mark = safe_float(p_row.get("ask")), safe_float(p_row.get("bid")), safe_float(p_row.get("mark"))
         c_ask, c_bid, c_mark = safe_float(c_row.get("ask")), safe_float(c_row.get("bid")), safe_float(c_row.get("mark"))
 
@@ -404,7 +405,7 @@ class MasterThesisCalculator:
             "skew_30d_normalized_ratio": ratio,
             "skew_actual_put_delta": put_delta,
             "skew_actual_call_delta": call_delta,
-            "skew_delta_symmetry_gap": sym_gap,  # PAY-65
+            "skew_delta_symmetry_gap": sym_gap,
             "skew_delta_anchor": "PRIMARY_25D_SYMMETRIC" if in_band else "FALLBACK_NEAREST_SYMMETRIC",
             "skew_tenor_dte": int(target_dte),
             "skew_regime": "NORMAL_PUT_SKEW" if diff < 0 else "INVERTED_CALL_SKEW",
@@ -496,7 +497,6 @@ class MasterThesisCalculator:
                 "S3": round(l - 2 * (h - p), 2),
             }
 
-        # 3-Tier Lookback Realized Volatility Engine (PAY-48)
         rv_dict = {"state": "CALCULATED"}
         for label, w in [("10d_tactical", 10), ("30d_intermediate", 30), ("252d_macro", 252)]:
             n = len(self.df_history)
