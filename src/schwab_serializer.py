@@ -1,15 +1,13 @@
 """
 schwab_serializer.py
 ========================================================================================
-Institutional Charles Schwab JSON Sanitization & NumPy Primitives Serializer
-Protocol v16.21 Production Certified
+Institutional Charles Schwab JSON Sanitization & Serializer (Protocol v16.21)
 ========================================================================================
-Changelog v16.21 (Round-Twenty Spec Lock):
-  - PRESERVE_NULL_CONTAINERS whitelist prevents null-stripping on market_cap_divergence.
-  - Recursively converts NumPy scalars and Pandas frames before scalar guards.
-  - Retains currency formatting for quote displays while preserving raw floats
-    under EXCLUDED_FORMAT_PREFIXES = ("calculated_metrics",).
-  - Pinned export_compact_json() signature to Tuple[Path, Dict[str, Any]].
+Guarantees:
+  - Whitelist preservation (PRESERVE_NULL_CONTAINERS): market_cap_divergence, 
+    short_locate_status, step_1_fundamentals (preserves margin_fields_suspect: null).
+  - Prefix exclusion (EXCLUDED_FORMAT_PREFIXES): Preserves bare float primitives.
+  - Recursively formats quote strings without polluting pure mathematical blocks.
 ========================================================================================
 """
 
@@ -29,22 +27,31 @@ logger.addHandler(logging.NullHandler())
 
 CURRENCY_KEYS: Set[str] = {
     "lastPrice", "closePrice", "bidPrice", "askPrice", "divAmount",
-    "cfo_per_share", "imputed_book_value_of_equity", "imputed_total_debt",
-    "R3", "R2", "R1", "Pivot", "S1", "S2", "S3",
-    "strikePrice", "mark", "bid", "ask",
+    "cfo_per_share", "strikePrice", "mark", "bid", "ask",
 }
 
-EXCLUDED_FORMAT_PREFIXES = ("calculated_metrics",)
-PRESERVE_NULL_CONTAINERS = {"market_cap_divergence"}
+EXCLUDED_FORMAT_PREFIXES: Tuple[str, ...] = (
+    "calculated_metrics",
+    "step_1_fundamentals_and_quality",
+    "step_5_technicals_and_flows",
+    "step_3_and_7_derivatives_and_surface",
+)
+
+PRESERVE_NULL_CONTAINERS: Set[str] = {
+    "market_cap_divergence",
+    "short_locate_status",
+    "step_1_fundamentals",
+}
 
 
 def sanitize_payload_for_serialization(
     obj: Any, key_name: str = "", current_path: str = ""
 ) -> Any:
-    """Formats raw quote displays while enforcing raw float primitives inside calculation blocks."""
-    # 1. Containers first to avoid truth-value ambiguity
+    """Recursively formats raw quotes while preserving bare float primitives in calculation blocks."""
     if isinstance(obj, (pd.DataFrame, pd.Series)):
-        return sanitize_payload_for_serialization(obj.to_dict(), key_name=key_name, current_path=current_path)
+        return sanitize_payload_for_serialization(
+            obj.to_dict(), key_name=key_name, current_path=current_path
+        )
 
     if isinstance(obj, np.ndarray):
         return [
@@ -52,23 +59,21 @@ def sanitize_payload_for_serialization(
             for item in obj.tolist()
         ]
 
-    # 2. Scope evaluation
     in_excluded_scope = any(
         current_path == prefix or current_path.startswith(f"{prefix}.")
         for prefix in EXCLUDED_FORMAT_PREFIXES
     )
 
-    # 3. Scalar types & null guards
     if isinstance(obj, (np.floating, float)):
         if math.isnan(obj) or math.isinf(obj):
             return None
         if not in_excluded_scope and key_name in CURRENCY_KEYS:
-            return f"${float(obj):.2f}"
+            return f"${float(obj):,.2f}"
         return float(obj) if in_excluded_scope else round(float(obj), 2)
 
     if isinstance(obj, (np.integer, int)) and not isinstance(obj, (bool, np.bool_)):
         if not in_excluded_scope and key_name in CURRENCY_KEYS:
-            return f"${float(obj):.2f}"
+            return f"${float(obj):,.2f}"
         return int(obj)
 
     if isinstance(obj, (bool, np.bool_)):
@@ -80,17 +85,16 @@ def sanitize_payload_for_serialization(
         if key_name in CURRENCY_KEYS and not obj.startswith("$"):
             try:
                 num = float(obj.replace(",", "").strip())
-                return f"${num:.2f}"
+                return f"${num:,.2f}"
             except ValueError:
                 return obj
         return obj
 
-    # 4. Composite structures & recursive traversal
     if isinstance(obj, dict):
-        current_container_name = current_path.split(".")[-1] if current_path else ""
-        preserve_nulls = current_container_name in PRESERVE_NULL_CONTAINERS
+        current_container = current_path.split(".")[-1] if current_path else ""
+        preserve_nulls = current_container in PRESERVE_NULL_CONTAINERS
 
-        cleaned = {}
+        cleaned: Dict[str, Any] = {}
         for k, v in obj.items():
             child_path = f"{current_path}.{k}" if current_path else str(k)
             val = sanitize_payload_for_serialization(v, key_name=str(k), current_path=child_path)
@@ -112,19 +116,19 @@ def sanitize_payload_for_serialization(
 
 
 def clean_for_json(data: Any, path: str = "") -> Any:
-    """Public helper for in-memory sanitization."""
+    """Public interface for dictionary sanitization."""
     return sanitize_payload_for_serialization(data, current_path=path)
 
 
 def export_compact_json(
     data: Dict[str, Any], filepath: str | Path
 ) -> Tuple[Path, Dict[str, Any]]:
-    """Serializes compact Master Thesis JSON payload and returns (saved_path, final_data)."""
+    """Minifies Master Thesis JSON payload and writes to disk."""
     path = Path(filepath)
     cleaned_data = sanitize_payload_for_serialization(data)
     json_str = json.dumps(
         cleaned_data,
-        indent=2,
+        separators=(",", ":"),
         ensure_ascii=False,
         default=str,
     )
@@ -133,14 +137,13 @@ def export_compact_json(
     with open(path, "w", encoding="utf-8") as f:
         f.write(json_str)
 
-    print(f"[Ready] Compact Master Thesis payload written to {path.resolve()}")
     return path, cleaned_data
 
 
 def serialize_and_export_thesis(
     payload: Dict[str, Any], output_path: Optional[str] = None
 ) -> str:
-    """Alternative signature returning the raw formatted JSON string."""
+    """Returns raw minified JSON string."""
     path = Path(output_path) if output_path else Path("thesis_output.json")
     _, cleaned = export_compact_json(payload, path)
-    return json.dumps(cleaned, indent=2, ensure_ascii=False, default=str)
+    return json.dumps(cleaned, separators=(",", ":"), ensure_ascii=False, default=str)
