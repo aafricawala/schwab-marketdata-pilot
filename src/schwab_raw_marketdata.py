@@ -12,7 +12,8 @@ def safe_float(v: Any) -> Optional[float]:
     if v is None or pd.isna(v): return None
     try:
         f = float(str(v).replace("$", "").replace(",", "").strip())
-        return None if math.isnan(f) or math.isinf(f) else f
+        if math.isnan(f) or math.isinf(f): return None
+        return 0.0 if f == 0.0 else f
     except (ValueError, TypeError): return None
 
 def extract_market_open_status(client: Any, *args: Any, **kwargs: Any) -> Optional[bool]:
@@ -52,9 +53,9 @@ def extract_strict_underlying_data(client: Any, symbol: str, tz: Optional[ZoneIn
     ref = payload.get("reference", {}) if isinstance(payload, dict) else {}
 
     asset_type = str(ref.get("assetType") or quote.get("assetType") or "").upper()
-    description = str(ref.get("description") or "").upper()
+    description = str(ref.get("description") or quote.get("description") or "").upper()
     is_adr = bool(ref.get("isAdr") or asset_type == "ADR" or "ADR" in description)
-    country = str(ref.get("country") or "").upper()
+    country = str(ref.get("country") or quote.get("country") or "").upper()
     is_foreign = is_adr or (bool(country) and country not in {"US", "USA"})
 
     raw_shares = safe_float(fund.get("sharesOutstanding"))
@@ -65,38 +66,73 @@ def extract_strict_underlying_data(client: Any, symbol: str, tz: Optional[ZoneIn
     net_m = safe_float(fund.get("netProfitMarginTTM") or fund.get("netProfitMargin"))
     op_m = safe_float(fund.get("operatingMarginTTM") or fund.get("operatingMargin"))
     m_absent = (gross_m is None and net_m is None and op_m is None)
+    tot_debt = safe_float(fund.get("totalDebtToEquity"))
+
+    last_p = safe_float(quote.get("lastPrice"))
+    close_p = safe_float(quote.get("closePrice"))
+    bid_p = safe_float(quote.get("bidPrice"))
+    ask_p = safe_float(quote.get("askPrice"))
+    bid_sz = safe_float(quote.get("bidSize"))
+    ask_sz = safe_float(quote.get("askSize"))
+    tot_vol = safe_float(quote.get("totalVolume"))
+
+    is_unquoted_halted = (last_p is None and close_p is None and tot_vol is None)
 
     is_wrapper_explicit = (
-        asset_type in {"ETF", "ETN", "MUTUAL_FUND", "COLLECTIVE_INVESTMENT"}
-        or bool(re.search(r"\b(ETN|ETF|FUND|TRUST|INDEX NOTE)\b", description))
+        not is_unquoted_halted and (
+            asset_type in {"ETF", "ETN", "MUTUAL_FUND", "COLLECTIVE_INVESTMENT", "CLOSED_END_FUND"}
+            or bool(re.search(r"\b(ETN|ETF|FUND|TRUST|INDEX NOTE|CEF|CLOSED-END)\b", description))
+        )
     )
     is_structural_wrapper = (
         is_wrapper_explicit or (
-            m_absent and raw_shares is None and (raw_pe is None or raw_pe <= 0.0)
-            and raw_div_y is not None and raw_div_y > 15.0
+            not is_unquoted_halted and m_absent and tot_debt is None and (raw_pe is None or raw_pe <= 0.0)
+            and (raw_shares is None or (raw_div_y is not None and raw_div_y > 10.0))
         )
     )
 
-    last_p = safe_float(quote.get("lastPrice") or quote.get("closePrice"))
-    close_p = safe_float(quote.get("closePrice") or quote.get("lastPrice"))
-    bid_p = safe_float(quote.get("bidPrice"))
-    ask_p = safe_float(quote.get("askPrice"))
     q_epoch = quote.get("quoteTime")
     zone = tz or ZoneInfo("America/New_York")
+    now_utc = datetime.now(timezone.utc)
     q_iso = datetime.fromtimestamp(q_epoch / 1000.0, tz=timezone.utc).astimezone(zone).isoformat() if q_epoch and safe_float(q_epoch) and q_epoch > 0 else None
+    quote_age = max(0.0, (now_utc.timestamp() - (q_epoch / 1000.0))) if q_epoch and safe_float(q_epoch) and q_epoch > 0 else None
+    if quote_age is not None:
+        q_class = "REAL_TIME" if quote_age < 60.0 else ("RECENT" if quote_age <= 600.0 else ("DELAYED" if quote_age <= 3600.0 else "STALE"))
+        q_reason = None
+    else:
+        q_class = "UNKNOWN"
+        q_reason = "quote_time_unavailable_or_halted_asset"
 
+    comp_name = description if description else clean_sym
     grounding = {
         "symbol": clean_sym,
+        "company_name": comp_name,
         "lastPrice": f"${last_p:.2f}" if last_p is not None else None,
         "closePrice": f"${close_p:.2f}" if close_p is not None else None,
-        "quoteTime_ISO_ET": q_iso
+        "quoteTime_ISO_ET": q_iso,
+        "quote_age_seconds": round(quote_age, 2) if quote_age is not None else None,
+        "quote_age_classification": q_class
     }
+    if q_reason:
+        grounding["quote_age_reason"] = q_reason
+    if is_unquoted_halted and not description:
+        grounding["company_name_status"] = "FALLBACK_TICKER_ONLY_UNQUOTED"
 
     roe = safe_float(fund.get("returnOnEquity") or fund.get("roe"))
     roa = safe_float(fund.get("returnOnAssets") or fund.get("roa"))
-    m_suspect = bool(net_m is not None and op_m is not None and net_m == op_m)
+    if net_m is not None and op_m is not None:
+        m_suspect = bool(net_m == op_m)
+        m_suspect_state = "AS_REPORTED"
+        m_suspect_reason = "vendor_net_and_operating_margins_identical" if m_suspect else None
+    else:
+        m_suspect = None
+        m_suspect_state = "VENDOR_UNAVAILABLE_INPUTS_ABSENT"
+        m_suspect_reason = None
 
-    if is_structural_wrapper:
+    if is_unquoted_halted:
+        shares_out = raw_shares
+        shares_state = "UNAVAILABLE_ASSET_HALTED_OR_UNQUOTED"
+    elif is_structural_wrapper:
         shares_out = None
         shares_state = "UNAVAILABLE_FOR_ETN_OR_FUND"
     elif raw_shares is not None and raw_shares > 0:
@@ -107,7 +143,10 @@ def extract_strict_underlying_data(client: Any, symbol: str, tz: Optional[ZoneIn
         shares_state = "UNAVAILABLE_FOR_FOREIGN_ADR" if is_foreign else "VENDOR_UNAVAILABLE"
 
     eps_val = safe_float(fund.get("eps") or fund.get("epsTTM"))
-    if is_structural_wrapper:
+    if is_unquoted_halted and eps_val is None:
+        eps = None
+        eps_state = "VENDOR_UNAVAILABLE_ASSET_HALTED"
+    elif is_structural_wrapper:
         eps = None
         eps_state = "VENDOR_UNAVAILABLE_ETF_OR_ETN_NO_EPS"
     elif is_foreign and (eps_val is None or eps_val == 0.0 or abs(eps_val) < 0.01):
@@ -120,35 +159,47 @@ def extract_strict_underlying_data(client: Any, symbol: str, tz: Optional[ZoneIn
         eps = 0.0 if ("eps" in fund and fund.get("eps") == 0) else None
         eps_state = "AS_REPORTED" if eps == 0.0 else "VENDOR_UNAVAILABLE"
 
-    raw_div_f = safe_float(fund.get("dividendFreq") or fund.get("divFreq"))
-    freq = raw_div_f if raw_div_f in ALLOWED_DIV_FREQS else (0.0 if (raw_div_y == 0.0 or raw_div_a == 0.0) else None)
-    div_amt = raw_div_a if raw_div_a is not None else 0.0
-    if raw_div_y == 0.0 or div_amt == 0.0:
-        div_y, div_basis = 0.0, "AS_REPORTED_ZERO_NON_PAYER"
-    elif raw_div_y is not None:
-        div_y, div_basis = raw_div_y, "ANNUAL_VENDOR_CONFIRMED"
+    if is_unquoted_halted and raw_pe is None:
+        pe_out = None
+        pe_state = "VENDOR_UNAVAILABLE_ASSET_HALTED"
+    elif is_structural_wrapper:
+        pe_out = None
+        pe_state = "NOT_APPLICABLE_ETF_OR_FUND"
     else:
-        div_y, div_basis = None, "VENDOR_UNAVAILABLE"
+        pe_out = raw_pe
+        pe_state = "AS_REPORTED" if raw_pe is not None else "VENDOR_UNAVAILABLE"
+
+    raw_div_f = safe_float(fund.get("dividendFreq") or fund.get("divFreq"))
+    is_non_payer = (raw_div_y == 0.0 or raw_div_a == 0.0 or (raw_div_y is None and raw_div_a is None))
+    if is_non_payer:
+        div_y, div_y_raw, div_amt, freq, div_basis = 0.0, 0.0, 0.0, 0.0, "AS_REPORTED_ZERO_NON_PAYER"
+    else:
+        div_y = raw_div_y
+        div_y_raw = raw_div_y
+        div_amt = raw_div_a if raw_div_a is not None else 0.0
+        freq = raw_div_f if raw_div_f in ALLOWED_DIV_FREQS else None
+        div_basis = "ANNUAL_VENDOR_CONFIRMED" if raw_div_y is not None else "VENDOR_UNAVAILABLE"
 
     raw_mcap = safe_float(fund.get("marketCap") or fund.get("marketCapitalization"))
 
     step1 = {
         "beta": safe_float(fund.get("beta")),
         "beta_state": "AS_REPORTED" if safe_float(fund.get("beta")) is not None else "VENDOR_UNAVAILABLE",
-        "peRatio": safe_float(fund.get("peRatio")),
+        "peRatio": pe_out,
+        "peRatio_state": pe_state,
         "pegRatio": safe_float(fund.get("pegRatio")),
         "pegRatio_state": "AS_REPORTED" if safe_float(fund.get("pegRatio")) is not None else "VENDOR_UNAVAILABLE",
         "pcfRatio": safe_float(fund.get("pcfRatio")),
         "pcfRatio_state": "AS_REPORTED" if safe_float(fund.get("pcfRatio")) is not None else "VENDOR_UNAVAILABLE",
         "pbRatio": safe_float(fund.get("pbRatio")),
-        "totalDebtToEquity": safe_float(fund.get("totalDebtToEquity")),
+        "totalDebtToEquity": tot_debt,
         "totalDebtToEquity_basis": "VENDOR_RAW_UNVERIFIED",
         "grossMarginTTM": gross_m,
         "netProfitMarginTTM": net_m,
         "operatingMarginTTM": op_m,
         "margin_fields_suspect": m_suspect,
-        "margin_fields_suspect_reason": "vendor_net_and_operating_margins_identical" if m_suspect else None,
-        "margin_fields_suspect_state": "VENDOR_UNAVAILABLE_INPUTS_ABSENT" if m_absent else "AS_REPORTED",
+        "margin_fields_suspect_reason": m_suspect_reason,
+        "margin_fields_suspect_state": m_suspect_state,
         "returnOnEquity": roe,
         "returnOnEquity_state": "AS_REPORTED" if roe is not None else "VENDOR_UNAVAILABLE",
         "returnOnAssets": roa,
@@ -159,7 +210,7 @@ def extract_strict_underlying_data(client: Any, symbol: str, tz: Optional[ZoneIn
         "revChangeYear_state": "AS_REPORTED",
         "divYield": div_y,
         "divYield_basis": div_basis,
-        "divYield_raw": raw_div_y,
+        "divYield_raw": div_y_raw,
         "divAmount": f"${div_amt:.2f}",
         "div_amount_basis": "ANNUAL",
         "divFreq": freq,
@@ -173,35 +224,47 @@ def extract_strict_underlying_data(client: Any, symbol: str, tz: Optional[ZoneIn
     is_htb = ref.get("isHardToBorrow")
     raw_htb_r = safe_float(ref.get("htbRate"))
     if raw_htb_r is not None and raw_htb_r < 0.0:
-        htb_r = None
-        htb_status = "INVALID_NEGATIVE_VENDOR_RATE"
+        htb_r, htb_status = None, "INVALID_NEGATIVE_VENDOR_RATE"
     elif is_htb and (raw_htb_r == 0.0 or raw_htb_r is None):
-        htb_r = 0.0
-        htb_status = "HTB_FLAG_ACTIVE_RATE_PENDING_BROKER_LOCATE"
+        htb_r, htb_status = 0.0, "HTB_FLAG_ACTIVE_RATE_PENDING_BROKER_LOCATE"
+    elif is_htb:
+        htb_r, htb_status = raw_htb_r or 0.0, "RATE_CONFIRMED"
     else:
-        htb_r = raw_htb_r or 0.0
-        htb_status = "RATE_CONFIRMED" if is_htb else "NOT_APPLICABLE_ETB"
+        htb_r, htb_status = raw_htb_r or 0.0, "NOT_APPLICABLE_ETB"
 
     short_loc = {
         "state": "FULL_PASSTHROUGH",
         "isShortable": is_short if isinstance(is_short, bool) else True,
         "isHardToBorrow": is_htb if isinstance(is_htb, bool) else False,
-        "htbRate": htb_r
+        "htbRate": htb_r,
+        "htb_rate_status": htb_status
     }
-    if htb_status in {"HTB_FLAG_ACTIVE_RATE_PENDING_BROKER_LOCATE", "INVALID_NEGATIVE_VENDOR_RATE"}:
-        short_loc["htb_rate_status"] = htb_status
+    if raw_htb_r is not None and raw_htb_r < 0.0:
+        short_loc["htbRate_raw"] = raw_htb_r
 
-    tot_vol = safe_float(quote.get("totalVolume"))
+    is_zero_book = (tot_vol == 0.0 and (bid_sz == 0.0 or bid_sz is None) and (ask_sz == 0.0 or ask_sz is None))
+    is_crossed = (bid_p is not None and ask_p is not None and bid_p == ask_p and (tot_vol == 0.0 or tot_vol is None))
+
+    if is_unquoted_halted:
+        liq_state, liq_reason = "UNKNOWN", "quote_book_empty_asset_halted_or_unquoted"
+    elif is_crossed:
+        liq_state, liq_reason = "SUSPECT_CROSSED_OR_ZERO_DEPTH", "bid_ask_identical_zero_trading_volume"
+    elif is_zero_book:
+        liq_state, liq_reason = "ZERO_BOOK_ACTIVITY_RECORDED", "no_volume_and_zero_book_depth"
+    else:
+        liq_state, liq_reason = "FULL_PASSTHROUGH", None
+
     v10 = safe_float(fund.get("vol10DayAvg") or fund.get("avg10DaysVolume"))
     v1y = safe_float(fund.get("vol1YearAvg") or fund.get("avg1YearVolume"))
     liq = {
-        "state": "FULL_PASSTHROUGH",
+        "state": liq_state,
         "bidPrice": f"${bid_p:.2f}" if bid_p is not None else None,
         "askPrice": f"${ask_p:.2f}" if ask_p is not None else None,
-        "bidSize": safe_float(quote.get("bidSize")),
-        "askSize": safe_float(quote.get("askSize")),
+        "bidSize": bid_sz,
+        "askSize": ask_sz,
         "totalVolume": tot_vol
     }
+    if liq_reason: liq["reason"] = liq_reason
     if v10 is not None and v10 > 0.0:
         liq["vol10DayAvg"] = v10
         liq["vol10DayAvg_state"] = "AS_REPORTED"

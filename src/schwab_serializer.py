@@ -1,24 +1,8 @@
-"""
-schwab_serializer.py
-========================================================================================
-Institutional Charles Schwab JSON Sanitization & Serializer (Protocol v16.21)
-========================================================================================
-Guarantees:
-  - Whitelist preservation (PRESERVE_NULL_CONTAINERS): market_cap_divergence, 
-    short_locate_status, step_1_fundamentals (preserves margin_fields_suspect: null).
-  - Prefix exclusion (EXCLUDED_FORMAT_PREFIXES): Preserves bare float primitives.
-  - Recursively formats quote strings without polluting pure mathematical blocks.
-========================================================================================
-"""
-
+# src/schwab_serializer.py
 from __future__ import annotations
-
-import json
-import logging
-import math
+import json, logging, math
 from pathlib import Path
 from typing import Any, Dict, Optional, Set, Tuple
-
 import numpy as np
 import pandas as pd
 
@@ -38,31 +22,24 @@ EXCLUDED_FORMAT_PREFIXES: Tuple[str, ...] = (
 )
 
 PRESERVE_NULL_CONTAINERS: Set[str] = {
+    "phase_0_grounding",
     "market_cap_divergence",
     "short_locate_status",
     "step_1_fundamentals",
+    "step_1_fundamentals_and_quality",
+    "step_3_and_7_derivatives_and_surface",
+    "step_5_technicals_and_flows",
+    "skew_30d",
 }
 
-
-def sanitize_payload_for_serialization(
-    obj: Any, key_name: str = "", current_path: str = ""
-) -> Any:
-    """Recursively formats raw quotes while preserving bare float primitives in calculation blocks."""
+def sanitize_payload_for_serialization(obj: Any, key_name: str = "", current_path: str = "") -> Any:
     if isinstance(obj, (pd.DataFrame, pd.Series)):
-        return sanitize_payload_for_serialization(
-            obj.to_dict(), key_name=key_name, current_path=current_path
-        )
+        return sanitize_payload_for_serialization(obj.to_dict(), key_name=key_name, current_path=current_path)
 
     if isinstance(obj, np.ndarray):
-        return [
-            sanitize_payload_for_serialization(item, key_name=key_name, current_path=current_path)
-            for item in obj.tolist()
-        ]
+        return [sanitize_payload_for_serialization(item, key_name=key_name, current_path=current_path) for item in obj.tolist()]
 
-    in_excluded_scope = any(
-        current_path == prefix or current_path.startswith(f"{prefix}.")
-        for prefix in EXCLUDED_FORMAT_PREFIXES
-    )
+    in_excluded_scope = any(current_path == prefix or current_path.startswith(f"{prefix}.") for prefix in EXCLUDED_FORMAT_PREFIXES)
 
     if isinstance(obj, (np.floating, float)):
         if math.isnan(obj) or math.isinf(obj):
@@ -93,7 +70,6 @@ def sanitize_payload_for_serialization(
     if isinstance(obj, dict):
         current_container = current_path.split(".")[-1] if current_path else ""
         preserve_nulls = current_container in PRESERVE_NULL_CONTAINERS
-
         cleaned: Dict[str, Any] = {}
         for k, v in obj.items():
             child_path = f"{current_path}.{k}" if current_path else str(k)
@@ -103,47 +79,26 @@ def sanitize_payload_for_serialization(
         return cleaned
 
     if isinstance(obj, (list, tuple, set)):
-        return [
-            sanitize_payload_for_serialization(item, key_name=key_name, current_path=current_path)
-            for item in obj
-            if item is not None
-        ]
+        return [sanitize_payload_for_serialization(item, key_name=key_name, current_path=current_path) for item in obj if item is not None]
 
     if obj is None or pd.isna(obj):
         return None
 
     return obj
 
-
 def clean_for_json(data: Any, path: str = "") -> Any:
-    """Public interface for dictionary sanitization."""
     return sanitize_payload_for_serialization(data, current_path=path)
 
-
-def export_compact_json(
-    data: Dict[str, Any], filepath: str | Path
-) -> Tuple[Path, Dict[str, Any]]:
-    """Minifies Master Thesis JSON payload and writes to disk."""
+def export_compact_json(data: Dict[str, Any], filepath: str | Path) -> Tuple[Path, Dict[str, Any]]:
     path = Path(filepath)
     cleaned_data = sanitize_payload_for_serialization(data)
-    json_str = json.dumps(
-        cleaned_data,
-        separators=(",", ":"),
-        ensure_ascii=False,
-        default=str,
-    )
-
+    json_str = json.dumps(cleaned_data, separators=(",", ":"), ensure_ascii=False, default=str)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         f.write(json_str)
-
     return path, cleaned_data
 
-
-def serialize_and_export_thesis(
-    payload: Dict[str, Any], output_path: Optional[str] = None
-) -> str:
-    """Returns raw minified JSON string."""
+def serialize_and_export_thesis(payload: Dict[str, Any], output_path: Optional[str] = None) -> str:
     path = Path(output_path) if output_path else Path("thesis_output.json")
     _, cleaned = export_compact_json(payload, path)
     return json.dumps(cleaned, separators=(",", ":"), ensure_ascii=False, default=str)
