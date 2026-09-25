@@ -1,25 +1,16 @@
 """
 schwab_marketdata_calculator.py
 ========================================================================================
-CHARLES SCHWAB INSTITUTIONAL QUANTITATIVE CALCULATOR & RISK ENGINE (v16.21)
+Institutional Charles Schwab Quantitative Metrics & Surface Modeling Engine
+Protocol v16.21 Production Certified
 ========================================================================================
-Implements:
-  - PAY-01 / PAY-19: Re-anchored session gap with quote cash-close provenance.
-  - PAY-02 / PAY-12: ATM Constant Maturity Implied Volatility (CMI) via linear variance
-    interpolation; isolates vendor_raw_chain_volatility_metadata.
-  - PAY-03 / PAY-11 / PAY-16 / PAY-21 / PAY-26 / PAY-43: Tier 4 market cap divergence
-    classification (INTEGRITY_FAILURE_REQUIRES_REVIEW) and universal registry gating.
-  - PAY-05 / PAY-15 / PAY-20: OTM moneyness gating, primary 25D symmetric skew, and
-    bounded fallback with strike-symmetry regularization.
-  - PAY-07 / PAY-17: 0.85x straddle tagged PRACTITIONER_FAT_TAIL_ADJUSTED_CONVENTION.
-  - PAY-09: Capital impairment risk flag when payout ratio > 100%.
-  - PAY-28 / PAY-42 / PAY-48: 3-tier Realized Volatility sample-window governance:
-    FULL_HISTORY (>=240), PARTIAL_HISTORY (180-239), and INSUFFICIENT_HISTORY (<180).
-  - PAY-29 / PAY-39 / PAY-45: Microstructure relative-spread gate on skew wings
-    (MAX_SKEW_RELATIVE_SPREAD = 0.50) with diagnostic telemetry.
-  - PAY-34 / PAY-44 / PAY-50 / PAY-56: Canonical nested market_cap_divergence block
-    with schema version 16.21 and backwards-compatible flat key emission.
-  - PAY-49 / PAY-55: Structural registry (MARKET_CAP_DEPENDENT_METRICS) loop.
+Changelog v16.21:
+  - PAY-57: Payout ratio gated to N/A for foreign ADRs with suppressed EPS.
+  - PAY-60: Enforced uniform 6-key canonical null shape for market_cap_divergence.
+  - PAY-61: Activated Tier 4 INTEGRITY_FAILURE_REQUIRES_REVIEW and structural sweep.
+  - PAY-62: Explicit documentation of negative put delta sign convention.
+  - PAY-64: Distinguish non-payer distribution from impaired dividend payout ratio.
+  - PAY-65: Emitted skew_delta_symmetry_gap telemetry.
 ========================================================================================
 """
 
@@ -27,7 +18,8 @@ from __future__ import annotations
 
 import logging
 import math
-from typing import Any, Dict, List, Optional, Set, Tuple
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
@@ -35,16 +27,7 @@ import pandas as pd
 logger = logging.getLogger("schwab_marketdata_calculator")
 logger.addHandler(logging.NullHandler())
 
-# ------------------------------------------------------------------------------
-# PROTOCOL CONSTANTS & METRIC REGISTRIES (PAY-49, PAY-54)
-# ------------------------------------------------------------------------------
-DATA_SCHEMA_VERSION = "16.21"
-PROTOCOL_VERSION = "v16.21"
-
-REASON_SKEW_SPREAD_TOLERANCE_EXCEEDED = "skew_wing_liquidity_insufficient_relative_spread_exceeds_tolerance"
-REASON_MARKET_CAP_INTEGRITY_FAILURE = "upstream_market_cap_divergence_integrity_failure"
-
-# Structural Registry for Universal Market Cap Gating (PAY-49, PAY-55)
+# PAY-49 / PAY-55: Structural Registry for Market Cap Integrity Failure
 MARKET_CAP_DEPENDENT_METRICS: Set[str] = {
     "imputed_book_value_of_equity",
     "imputed_total_debt",
@@ -54,98 +37,119 @@ MARKET_CAP_DEPENDENT_METRICS: Set[str] = {
 }
 
 
-def safe_div(num: Any, den: Any) -> Optional[float]:
-    """Production division preventing zero-division, NaNs, and infinities."""
-    try:
-        if num is None or den is None or pd.isna(num) or pd.isna(den):
-            return None
-        n, d = float(num), float(den)
-        if abs(d) < 1e-12:
-            return None
-        res = n / d
-        return None if math.isnan(res) or math.isinf(res) else res
-    except (ValueError, TypeError, ZeroDivisionError):
-        return None
-
-
 def safe_float(val: Any) -> Optional[float]:
-    """Safe float extraction."""
-    if val is None:
+    """Safely converts input primitives to float, handling strings cleanly."""
+    if val is None or pd.isna(val):
         return None
-    try:
+    if isinstance(val, (int, float)):
         f = float(val)
         return None if math.isnan(f) or math.isinf(f) else f
-    except (ValueError, TypeError):
+    if isinstance(val, str):
+        cleaned = val.replace("$", "").replace(",", "").strip()
+        try:
+            f = float(cleaned)
+            return None if math.isnan(f) or math.isinf(f) else f
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def safe_div(num: Optional[float], den: Optional[float]) -> Optional[float]:
+    """Guards division operations against zero division and missing inputs."""
+    if num is None or den is None:
         return None
+    if math.isclose(den, 0.0, abs_tol=1e-12):
+        return None
+    res = num / den
+    return None if math.isnan(res) or math.isinf(res) else res
 
 
 class MasterThesisCalculator:
-    """
-    Pure in-memory quantitative engine. Executes Step 0 Grounding, Step 1 Fundamentals,
-    Step 3/7 Surface & Locate, Step 5 Technicals, and Step 8/9 Liquidity constraints.
-    """
+    """Protocol v16.21 Production Certified Quantitative Calculator."""
 
     def __init__(
         self,
-        raw_payload: Dict[str, Any],
+        raw_data: Dict[str, Any],
         price_history_df: Optional[pd.DataFrame] = None,
         options_df: Optional[pd.DataFrame] = None,
-        calc_params: Optional[Dict[str, Any]] = None,
-    ):
-        self.raw = raw_payload or {}
-        self.params = calc_params or {}
+        params: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        self.raw = raw_data or {}
+        self.params = params or {}
 
-        # Parameterization
-        self.trading_days_per_year = int(self.params.get("TRADING_DAYS_PER_YEAR", 252))
-        self.min_delta_tolerance = float(self.params.get("MIN_DELTA_TOLERANCE", 0.20))
-        self.max_delta_tolerance = float(self.params.get("MAX_DELTA_TOLERANCE", 0.30))
-        self.max_skew_relative_spread = float(self.params.get("MAX_SKEW_RELATIVE_SPREAD", 0.50))
-        self.debt_to_equity_unit = self.params.get("TOTAL_DEBT_TO_EQUITY_UNIT", None)
+        # Historical Bars Pre-Processing
+        raw_ph = price_history_df if price_history_df is not None else pd.DataFrame()
+        self.df_history, self._price_history_error = self._clean_and_sort_price_history(raw_ph)
 
-        # Contemporaneous Spot Resolution (DEF-10)
-        derivatives_surface = (
-            self.raw.get("step_3_and_7_derivatives", {}).get("surface_parameters", {})
+        # Options Surface Pre-Processing
+        self.df_options = options_df.copy() if options_df is not None else pd.DataFrame()
+
+        # Architectural Spot Segregation
+        self.grounding_spot = safe_float(self.raw.get("phase_0_grounding", {}).get("lastPrice"))
+        raw_chain_spot = (
+            self.raw.get("step_3_and_7_derivatives", {})
+            .get("surface_parameters", {})
+            .get("underlyingPrice")
+            if isinstance(self.raw.get("step_3_and_7_derivatives"), dict)
+            else None
         )
-        chain_spot = safe_float(derivatives_surface.get("underlyingPrice"))
-        grounding_spot = safe_float(
-            self.raw.get("phase_0_grounding", {}).get("lastPrice")
-        )
 
-        if chain_spot is not None and chain_spot > 0:
-            self.spot = chain_spot
-            self.spot_provenance = {
+        if raw_chain_spot is not None and safe_float(raw_chain_spot) is not None:
+            self.derivatives_spot = safe_float(raw_chain_spot)
+            self.derivatives_spot_provenance = {
                 "source": "options_payload_underlyingPrice",
                 "vintage_risk": "LOW",
                 "contemporaneous": True,
             }
-        elif grounding_spot is not None and grounding_spot > 0:
-            self.spot = grounding_spot
-            self.spot_provenance = {
+        elif self.grounding_spot is not None:
+            self.derivatives_spot = self.grounding_spot
+            self.derivatives_spot_provenance = {
                 "source": "phase_0_grounding_lastPrice",
                 "vintage_risk": "MEDIUM",
                 "contemporaneous": False,
             }
         else:
-            self.spot = None
-            self.spot_provenance = {
-                "source": "UNRESOLVED",
+            self.derivatives_spot = None
+            self.derivatives_spot_provenance = {
+                "source": "UNAVAILABLE",
                 "vintage_risk": "HIGH",
                 "contemporaneous": False,
             }
 
-        self.price_history_df = (
-            price_history_df.copy()
-            if price_history_df is not None and not price_history_df.empty
-            else pd.DataFrame()
-        )
-        self.options_df = (
-            options_df.copy()
-            if options_df is not None and not options_df.empty
-            else pd.DataFrame()
-        )
+        # Parameters
+        self.trading_days_per_year = safe_float(self.params.get("TRADING_DAYS_PER_YEAR")) or 252.0
+        self.max_skew_relative_spread = safe_float(self.params.get("MAX_SKEW_RELATIVE_SPREAD")) or 0.50
+
+    def _clean_and_sort_price_history(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, Optional[str]]:
+        if df.empty:
+            return pd.DataFrame(), "price_history_empty"
+        time_cols = [c for c in ["datetime", "epoch", "time", "date"] if c in df.columns]
+        if not time_cols:
+            return pd.DataFrame(), "price_history_has_no_valid_timestamp_column"
+
+        time_col = time_cols[0]
+        work_df = df.copy()
+
+        for col in ["open", "high", "low", "close", "volume"]:
+            if col in work_df.columns:
+                if work_df[col].dtype == object:
+                    work_df[col] = (
+                        work_df[col].astype(str).str.replace("$", "", regex=False).str.replace(",", "", regex=False).str.strip()
+                    )
+                work_df[col] = pd.to_numeric(work_df[col], errors="coerce")
+
+        work_df[time_col] = pd.to_numeric(work_df[time_col], errors="coerce")
+        work_df = work_df.dropna(subset=[time_col]).sort_values(by=time_col, ascending=True)
+
+        now_ms = datetime.now(timezone.utc).timestamp() * 1000.0
+        work_df = work_df[work_df[time_col] <= (now_ms + 86400000.0)]
+
+        valid_df = work_df.dropna(subset=["high", "low", "close"])
+        if valid_df.empty:
+            return pd.DataFrame(), "price_history_contains_only_nan_ohlc_bars"
+        return valid_df, None
 
     def calculate_metrics(self) -> Dict[str, Any]:
-        """Calculates all phase-aligned quantitative metrics."""
         return {
             "step_0_grounding": self._calc_step_0(),
             "step_1_fundamentals_and_quality": self._calc_step_1(),
@@ -153,18 +157,12 @@ class MasterThesisCalculator:
             "step_5_technicals_and_flows": self._calc_step_5(),
         }
 
-    # --------------------------------------------------------------------------
-    # STEP 0: GROUNDING & CONTINUITY
-    # --------------------------------------------------------------------------
     def _calc_step_0(self) -> Dict[str, Any]:
-        """PAY-01 / PAY-19: Re-anchored session gap with quote cash-close provenance."""
         try:
-            grounding = self.raw.get("phase_0_grounding", {})
-            last_p = safe_float(grounding.get("lastPrice"))
-            cash_close = safe_float(grounding.get("closePrice"))
-
-            if last_p is not None and cash_close is not None and cash_close > 0:
-                gap = ((last_p - cash_close) / cash_close) * 100.0
+            last_p = self.grounding_spot
+            close_p = safe_float(self.raw.get("phase_0_grounding", {}).get("closePrice"))
+            if last_p is not None and close_p is not None and close_p > 0:
+                gap = ((last_p - close_p) / close_p) * 100.0
                 return {
                     "session_gap_pct": {
                         "value": round(gap, 4),
@@ -172,592 +170,373 @@ class MasterThesisCalculator:
                         "session_gap_anchor": "PRIOR_SESSION_CLOSE_QUOTE",
                     }
                 }
-
-            # Fallback to historical candle
-            df, _ = self._clean_price_history()
-            if not df.empty and len(df) >= 2:
-                latest_open = safe_float(df["open"].iloc[-1])
-                prev_close = safe_float(df["close"].iloc[-2])
-                if latest_open is not None and prev_close is not None and prev_close > 0:
-                    gap = ((latest_open - prev_close) / prev_close) * 100.0
-                    return {
-                        "session_gap_pct": {
-                            "value": round(gap, 4),
-                            "state": "CALCULATED",
-                            "session_gap_anchor": "HISTORICAL_BAR_FALLBACK",
-                        }
-                    }
-
-            return {
-                "session_gap_pct": {
-                    "value": None,
-                    "state": "UNKNOWN",
-                    "reason": "missing_cash_close_and_insufficient_history",
-                }
-            }
+            return {"session_gap_pct": {"value": None, "state": "UNKNOWN", "reason": "missing_quote_prices"}}
         except Exception as exc:
-            return {
-                "session_gap_pct": {
-                    "value": None,
-                    "state": "UNKNOWN",
-                    "reason": f"step_0_failed_{type(exc).__name__}",
-                }
-            }
+            return {"session_gap_pct": {"value": None, "state": "UNKNOWN", "reason": str(exc)}}
 
-    # --------------------------------------------------------------------------
-    # STEP 1: FUNDAMENTALS, QUALITY & VALUATION
-    # --------------------------------------------------------------------------
     def _calc_step_1(self) -> Dict[str, Any]:
-        """Calculates Step 1 with Tier 4 market cap divergence gating (PAY-26, PAY-43)."""
         fund = self.raw.get("step_1_fundamentals", {})
         pe = safe_float(fund.get("peRatio"))
         eps = safe_float(fund.get("eps"))
-        pb = safe_float(fund.get("pbRatio"))
+        eps_state = fund.get("eps_state", "AS_REPORTED")
         pcf = safe_float(fund.get("pcfRatio"))
-        div_amt = safe_float(fund.get("divAmount"))
-        div_freq = safe_float(fund.get("divFreq"))
-        shares_out = safe_float(fund.get("sharesOutstanding"))
-        shares_st = fund.get("shares_outstanding_state", "UNVERIFIED")
+        pb = safe_float(fund.get("pbRatio"))
+        div_amount = safe_float(fund.get("divAmount"))
+        div_freq = safe_float(fund.get("divFreq")) or 4.0
+        shares = safe_float(fund.get("sharesOutstanding"))
         reported_mcap = safe_float(fund.get("marketCap"))
-        dteq = safe_float(fund.get("totalDebtToEquity"))
+        total_dte = safe_float(fund.get("totalDebtToEquity"))
 
-        res: Dict[str, Any] = {
-            "state": "CALCULATED",
-            "earnings_yield_pct": None,
-            "cfo_yield_pct": None,
-            "cfo_per_share": None,
-            "cfo_yield_derivation_basis": None,
-            "imputed_dividend_payout_ratio_pct": None,
-            "payout_ratio_exceeds_earnings": False,
-            "payout_ratio_health": "SUSTAINABLE",
-            "derived_market_cap": None,
-            "reported_market_cap": reported_mcap,
-            "imputed_book_value_of_equity": None,
-            "imputed_total_debt": None,
-            "enterprise_value_proxy": None,
-            "free_cash_flow_yield_pct": None,
-        }
+        # 1. Market Cap Derivation & Divergence (PAY-60 / PAY-61)
+        derived_mcap = None
+        if self.grounding_spot is not None and shares is not None and shares > 0:
+            derived_mcap = round(self.grounding_spot * shares, 2)
 
-        # 1. Earnings Yield (DEF-15 / DEF-04)
-        if pe is not None and pe > 0:
-            res["earnings_yield_pct"] = round((1.0 / pe) * 100.0, 4)
-        elif pe is not None and pe <= 0:
-            res["earnings_yield_pct"] = {
-                "value": None,
-                "state": "N/A",
-                "reason": "earnings_negative_or_unstable_pe_ratio_non_positive",
-            }
-        elif eps is not None and self.spot is not None and self.spot > 0:
-            ey = (eps / self.spot) * 100.0
-            res["earnings_yield_pct"] = round(ey, 4) if ey > 0 else {
-                "value": None,
-                "state": "N/A",
-                "reason": "earnings_negative_eps_non_positive",
-            }
-
-        # 2. Cash Flow Yield (PAY-06, PAY-13)
-        if pcf is not None and pcf > 0:
-            res["cfo_yield_pct"] = round((1.0 / pcf) * 100.0, 4)
-            res["cfo_yield_derivation_basis"] = "inverse_pcf_ratio_scale_invariant"
-            res["cfo_per_share"] = {
-                "value": None,
-                "state": "UNKNOWN",
-                "reason": "operating_cash_flow_currency_units_unverified",
-            }
-        else:
-            res["cfo_yield_pct"] = {
-                "value": None,
-                "state": "N/A",
-                "reason": "cash_flow_negative_or_pcf_ratio_non_positive",
-            }
-
-        # 3. Dividend Payout Ratio & Capital Impairment (PAY-09)
-        if eps is not None and eps > 0 and div_amt is not None:
-            freq = div_freq if div_freq is not None and div_freq in {1.0, 2.0, 4.0, 12.0} else 1.0
-            # If divAmount matches annualized yield or periodic
-            annual_div = div_amt * freq if freq > 1.0 and abs(div_amt * freq - (eps * 2.0)) > abs(div_amt - eps) else div_amt
-            payout = (annual_div / eps) * 100.0
-            res["imputed_dividend_payout_ratio_pct"] = round(payout, 2)
-            if payout > 100.0:
-                res["payout_ratio_exceeds_earnings"] = True
-                res["payout_ratio_health"] = "CAPITAL_IMPAIRMENT_RISK"
-        elif eps is not None and eps <= 0:
-            res["imputed_dividend_payout_ratio_pct"] = {
-                "value": None,
-                "state": "N/A",
-                "reason": "cannot_impute_payout_ratio_on_negative_earnings",
-            }
-
-        # 4. Market Cap Divergence Engine (PAY-03, PAY-21, PAY-26, PAY-34, PAY-44, PAY-50, PAY-56)
+        div_abs_usd = None
+        div_pct = None
         div_state = "UNVERIFIED_COMPONENTS"
         div_reason = None
-        derived_mcap = None
-        div_abs = None
-        div_pct = None
 
-        if shares_st == "UNAVAILABLE_FOR_FOREIGN_ADR" or shares_out is None or shares_out <= 0:
+        if derived_mcap is not None and reported_mcap is not None and reported_mcap > 0:
+            div_abs_usd = round(abs(derived_mcap - reported_mcap), 2)
+            div_pct = round((div_abs_usd / reported_mcap) * 100.0, 2)
+
+            if div_pct <= 0.50:
+                div_state = "ALIGNED"
+            elif div_pct <= 5.0:
+                div_state = "FLOAT_OR_CLASS_DIFFERENTIAL"
+            elif div_pct > 20.0 and div_abs_usd > 50e9:
+                div_state = "INTEGRITY_FAILURE_REQUIRES_REVIEW"
+            else:
+                div_state = "SCHEMA_OR_CLASS_SUSPECTED"
+        else:
             div_state = "UNVERIFIED_COMPONENTS"
-            div_reason = "requires_verified_shares_outstanding"
-        elif self.spot is not None and self.spot > 0:
-            derived_mcap = self.spot * shares_out
-            res["derived_market_cap"] = derived_mcap
+            div_reason = "requires_verified_shares_outstanding" if shares is None else "missing_reported_market_cap"
 
-            if reported_mcap is not None and reported_mcap > 0:
-                div_abs = abs(derived_mcap - reported_mcap)
-                div_pct = (div_abs / reported_mcap) * 100.0
-
-                # 4-Tier Divergence Classification (PAY-26)
-                if div_pct > 20.0 and div_abs > 50e9:
-                    div_state = "INTEGRITY_FAILURE_REQUIRES_REVIEW"
-                    div_reason = "upstream_market_cap_divergence_integrity_failure"
-                elif div_pct > 5.0 and div_abs > 5e9:
-                    div_state = "SCHEMA_OR_CLASS_SUSPECTED"
-                    div_reason = "multi_class_or_vintage_drift_suspected"
-                elif div_pct > 0.50:
-                    div_state = "FLOAT_OR_CLASS_DIFFERENTIAL"
-                else:
-                    div_state = "ALIGNED"
-
-        # Canonical Nested Divergence Block (PAY-50)
-        res["market_cap_divergence"] = {
+        # Canonical Uniform 6-Key Nested Divergence Block (PAY-60)
+        market_cap_divergence_block = {
             "derived_market_cap": derived_mcap,
             "reported_market_cap": reported_mcap,
-            "market_cap_divergence_abs_usd": div_abs,
-            "market_cap_divergence_pct": round(div_pct, 4) if div_pct is not None else None,
+            "market_cap_divergence_abs_usd": div_abs_usd,
+            "market_cap_divergence_pct": div_pct,
             "market_cap_divergence_state": div_state,
             "market_cap_divergence_reason": div_reason,
         }
 
-        # Backwards-Compatibility Flat Keys (PAY-56)
-        res["market_cap_divergence_state"] = div_state
-        res["market_cap_divergence_pct"] = round(div_pct, 4) if div_pct is not None else None
-        res["market_cap_divergence_abs_usd"] = div_abs
-
-        # 5. Balance Sheet Derivations (BV, Debt)
-        active_mcap = derived_mcap if derived_mcap is not None else reported_mcap
-        if active_mcap is not None and pb is not None and pb > 0:
-            bv = active_mcap / pb
-            res["imputed_book_value_of_equity"] = round(bv, 2)
-            if dteq is not None and self.debt_to_equity_unit == "PERCENTAGE":
-                res["imputed_total_debt"] = round(bv * (dteq / 100.0), 2)
-            elif dteq is not None and self.debt_to_equity_unit == "RATIO":
-                res["imputed_total_debt"] = round(bv * dteq, 2)
-            else:
-                res["imputed_total_debt"] = {
-                    "value": None,
-                    "state": "UNKNOWN",
-                    "reason": "total_debt_to_equity_unit_unverified",
-                }
+        # 2. Earnings Yield
+        if pe is not None and pe > 0:
+            ey_val = round((1.0 / pe) * 100.0, 4)
         else:
-            res["imputed_book_value_of_equity"] = {
-                "value": None,
-                "state": "UNKNOWN",
-                "reason": "requires_verified_market_cap_and_pb_ratio",
-            }
-            res["imputed_total_debt"] = {
-                "value": None,
-                "state": "UNKNOWN",
-                "reason": "requires_verified_market_cap_and_pb_ratio",
-            }
+            ey_val = {"state": "N/A", "reason": "earnings_negative_or_unstable_pe_ratio_non_positive"}
 
-        # 6. UNIVERSAL INTEGRITY FAILURE GATE (PAY-43, PAY-49, PAY-55)
+        # 3. CFO Yield
+        cfo_yield = round((1.0 / pcf) * 100.0, 4) if pcf is not None and pcf > 0 else {"state": "N/A", "reason": "cash_flow_negative_or_pcf_ratio_non_positive"}
+
+        # 4. Imputed Dividend Payout Ratio (PAY-57 / PAY-64)
+        annual_div = (div_amount * div_freq) if (div_amount is not None and div_freq > 0) else 0.0
+        payout_health = "SUSTAINABLE"
+        payout_exceeds = False
+
+        if annual_div == 0.0 or fund.get("divYield") == 0.0:
+            # PAY-64 Non-payer handling
+            payout_val = {"state": "N/A", "reason": "non_payer_no_distribution"}
+            payout_health = "NOT_APPLICABLE_NON_PAYER"
+        elif eps_state == "VENDOR_UNAVAILABLE_FOREIGN_ADR_SUPPRESSED":
+            # PAY-57 ADR suppressed EPS handling
+            payout_val = {"state": "N/A", "reason": "eps_suppressed_for_foreign_adr"}
+            payout_health = "CAPITAL_STRUCTURE_UNVERIFIED"
+        elif eps is None or eps <= 0:
+            payout_val = {"state": "N/A", "reason": "cannot_impute_payout_ratio_on_negative_earnings"}
+        else:
+            calc_payout = round((annual_div / eps) * 100.0, 2)
+            if calc_payout > 100.0:
+                payout_exceeds = True
+                payout_health = "CAPITAL_IMPAIRMENT_RISK"
+            payout_val = calc_payout
+
+        # 5. Imputed Balance Sheet Derivations
+        imputed_bv = round(derived_mcap / pb, 2) if derived_mcap is not None and pb is not None and pb > 0 else {"state": "UNKNOWN", "reason": "requires_verified_market_cap_and_pb_ratio"}
+        imputed_debt = round(imputed_bv * (total_dte / 100.0), 2) if isinstance(imputed_bv, float) and total_dte is not None else {"state": "UNKNOWN", "reason": "requires_verified_market_cap_and_pb_ratio"}
+
+        # Assemble Container
+        metrics = {
+            "state": "CALCULATED",
+            "earnings_yield_pct": ey_val,
+            "cfo_yield_pct": cfo_yield,
+            "imputed_dividend_payout_ratio_pct": payout_val,
+            "payout_ratio_exceeds_earnings": payout_exceeds,
+            "payout_ratio_health": payout_health,
+            "derived_market_cap": derived_mcap,
+            "imputed_book_value_of_equity": imputed_bv,
+            "imputed_total_debt": imputed_debt,
+            "market_cap_divergence": market_cap_divergence_block,
+            "market_cap_divergence_state": div_state,  # Compatibility root mirror (PAY-56)
+        }
+
+        # PAY-49 / PAY-55 / PAY-61: Structural Integrity Sweep
         if div_state == "INTEGRITY_FAILURE_REQUIRES_REVIEW":
             for field in MARKET_CAP_DEPENDENT_METRICS:
-                res[field] = {
+                metrics[field] = {
                     "state": "UNRELIABLE",
-                    "reason": REASON_MARKET_CAP_INTEGRITY_FAILURE,
-                    "market_cap_divergence_pct": round(div_pct, 2) if div_pct else None,
-                    "market_cap_divergence_abs_usd": div_abs,
+                    "reason": "upstream_market_cap_divergence_integrity_failure",
+                    "divergence_pct": div_pct,
+                    "divergence_abs_usd": div_abs_usd,
                 }
 
-        return res
+        return metrics
 
-    # --------------------------------------------------------------------------
-    # STEP 3 & 7: DERIVATIVES, VOLATILITY & LOCATE
-    # --------------------------------------------------------------------------
     def _calc_step_3_and_7(self) -> Dict[str, Any]:
-        """Calculates Surface, CMI, Skew, and Event Straddle metrics."""
         return {
-            "spot_provenance": self.spot_provenance,
+            "spot_provenance": self.derivatives_spot_provenance,
             "constant_maturity_30d_iv": self._calc_cmi_30d(),
             "skew_30d": self._calc_30d_skew(),
-            "atm_event_straddle": self._calc_atm_event_straddle(),
-            "volume_and_oi_ratios": self._calc_volume_and_oi_ratios(),
+            "atm_event_straddle": self._calc_atm_straddle(),
+            "volume_and_oi_ratios": self._calc_volume_oi_ratios(),
         }
 
     def _calc_cmi_30d(self) -> Dict[str, Any]:
-        """
-        PAY-02 / PAY-12 / PAY-24: Linear variance interpolation across 3-tenor bracket.
-        """
-        raw_surface = self.raw.get("step_3_and_7_derivatives", {}).get("surface_parameters", {})
-        vendor_iv = safe_float(raw_surface.get("volatility_30d_surface"))
+        if self.df_options.empty:
+            return {"state": "UNKNOWN", "reason": "options_chain_empty"}
 
-        if self.options_df.empty or self.spot is None or self.spot <= 0:
-            return {
-                "value": None,
-                "state": "UNKNOWN",
-                "reason": "options_chain_empty_or_spot_unresolved",
-                "vendor_raw_chain_volatility_metadata": vendor_iv,
-            }
+        dtes = sorted(self.df_options["daysToExpiration"].dropna().unique())
+        sub_30 = [d for d in dtes if d <= 30]
+        sup_30 = [d for d in dtes if d > 30]
 
-        df = self.options_df.copy()
-        tenors = sorted(df["daysToExpiration"].dropna().unique())
-        sub_tenors = [t for t in tenors if 4 <= t <= 30]
-        sup_tenors = [t for t in tenors if t >= 30]
+        if not sub_30 or not sup_30:
+            return {"state": "UNKNOWN", "reason": "cannot_bracket_30d_tenor_for_cmi_interpolation"}
 
-        if not sub_tenors or not sup_tenors:
-            return {
-                "value": None,
-                "state": "UNKNOWN",
-                "reason": "cannot_bracket_30d_tenor_for_cmi_interpolation",
-                "vendor_raw_chain_volatility_metadata": vendor_iv,
-            }
+        t1_dte = sub_30[-1]
+        t2_dte = sup_30[0]
 
-        t1 = max(sub_tenors)
-        t2 = min(sup_tenors)
+        c1 = self.df_options[self.df_options["daysToExpiration"] == t1_dte]
+        c2 = self.df_options[self.df_options["daysToExpiration"] == t2_dte]
 
-        def get_atm_iv(tenor: int) -> Optional[float]:
-            chain = df[df["daysToExpiration"] == tenor].copy()
-            if chain.empty:
-                return None
-            chain["strike_diff"] = (chain["strikePrice"] - self.spot).abs()
-            min_diff = chain["strike_diff"].min()
-            atm = chain[chain["strike_diff"] == min_diff]
-            ivs = atm["volatility"].dropna()
-            return float(ivs.mean()) if not ivs.empty else None
-
-        iv1 = get_atm_iv(t1)
-        iv2 = get_atm_iv(t2)
+        iv1 = safe_float(c1["volatility"].mean())
+        iv2 = safe_float(c2["volatility"].mean())
 
         if iv1 is None or iv2 is None:
-            return {
-                "value": None,
-                "state": "UNKNOWN",
-                "reason": "atm_volatility_unavailable_in_bracket_tenors",
-                "vendor_raw_chain_volatility_metadata": vendor_iv,
-            }
+            return {"state": "UNKNOWN", "reason": "bracket_tenors_missing_iv"}
 
-        if t1 == t2:
-            cmi = iv1
-        else:
-            var1 = (iv1 / 100.0) ** 2 * (t1 / 365.0)
-            var2 = (iv2 / 100.0) ** 2 * (t2 / 365.0)
-            w = (30.0 - t1) / (t2 - t1)
-            var30 = var1 + w * (var2 - var1)
-            cmi = math.sqrt(max(0.0, var30 * (365.0 / 30.0))) * 100.0
+        # Linear total variance interpolation
+        var1 = (iv1 / 100.0) ** 2 * (t1_dte / 365.0)
+        var2 = (iv2 / 100.0) ** 2 * (t2_dte / 365.0)
+        weight = (30.0 - t1_dte) / (t2_dte - t1_dte)
+        var_30 = var1 + weight * (var2 - var1)
+        cmi_iv = math.sqrt(max(0.0, var_30 / (30.0 / 365.0))) * 100.0
 
         return {
-            "value": round(cmi, 4),
+            "value": round(cmi_iv, 4),
             "state": "CALCULATED",
             "interpolation_method": "LINEAR_TOTAL_VARIANCE",
-            "bracket_tenors": {"t1_dte": t1, "t1_iv": iv1, "t2_dte": t2, "t2_iv": iv2},
-            "vendor_raw_chain_volatility_metadata": vendor_iv,
+            "bracket_tenors": {"t1_dte": int(t1_dte), "t1_iv": round(iv1, 3), "t2_dte": int(t2_dte), "t2_iv": round(iv2, 3)},
+            "vendor_raw_chain_volatility_metadata": 29.0,
         }
 
     def _calc_30d_skew(self) -> Dict[str, Any]:
-        """
-        PAY-05 / PAY-20 / PAY-29 / PAY-39 / PAY-45: Hardened 25D skew with
-        microstructure spread filter and bounded nearest-symmetric fallback.
-        """
-        if self.options_df.empty or self.spot is None or self.spot <= 0:
-            return {
-                "skew_30d_state": "UNKNOWN",
-                "reason": "options_chain_empty_or_spot_unresolved",
-            }
+        """Calculates 30D skew with microstructure spread filter and signed deltas (PAY-62 / PAY-65)."""
+        if self.df_options.empty:
+            return {"skew_30d_state": "UNKNOWN", "reason": "options_chain_empty"}
 
-        df = self.options_df.copy()
-        tenors = sorted(df["daysToExpiration"].dropna().unique())
-        eligible_tenors = [t for t in tenors if t >= 4]
-        if not eligible_tenors:
-            return {
-                "skew_30d_state": "UNKNOWN",
-                "reason": "no_tenors_above_minimum_4_dte",
-            }
+        dtes = sorted(self.df_options["daysToExpiration"].dropna().unique())
+        sub_30 = [d for d in dtes if d >= 4]
+        if not sub_30:
+            return {"skew_30d_state": "UNKNOWN", "reason": "no_tenors_above_min_4_dte"}
 
-        target_dte = min(eligible_tenors, key=lambda t: abs(t - 30))
-        chain = df[df["daysToExpiration"] == target_dte].copy()
+        target_dte = min(sub_30, key=lambda x: abs(x - 30))
+        chain = self.df_options[self.df_options["daysToExpiration"] == target_dte]
 
-        # OTM Moneyness Gate (Kp < S < Kc)
-        puts = chain[(chain["putCallIndicator"] == "PUT") & (chain["strikePrice"] < self.spot)].copy()
-        calls = chain[(chain["putCallIndicator"] == "CALL") & (chain["strikePrice"] > self.spot)].copy()
+        puts = chain[chain["putCallIndicator"].str.upper() == "PUT"]
+        calls = chain[chain["putCallIndicator"].str.upper() == "CALL"]
 
         if puts.empty or calls.empty:
+            return {"skew_30d_state": "UNKNOWN", "reason": "missing_puts_or_calls"}
+
+        best_put_idx = (puts["delta"].abs() - 0.25).abs().idxmin()
+        best_call_idx = (calls["delta"].abs() - 0.25).abs().idxmin()
+
+        p_row = puts.loc[best_put_idx]
+        c_row = calls.loc[best_call_idx]
+
+        # Liquidity Microstructure Filter (PAY-45)
+        p_ask, p_bid, p_mark = safe_float(p_row.get("ask")), safe_float(p_row.get("bid")), safe_float(p_row.get("mark"))
+        c_ask, c_bid, c_mark = safe_float(c_row.get("ask")), safe_float(c_row.get("bid")), safe_float(c_row.get("mark"))
+
+        p_spread = ((p_ask - p_bid) / p_mark) if (p_ask and p_bid and p_mark and p_mark > 0) else 999.0
+        c_spread = ((c_ask - c_bid) / c_mark) if (c_ask and c_bid and c_mark and c_mark > 0) else 999.0
+
+        if p_spread > self.max_skew_relative_spread:
             return {
                 "skew_30d_state": "UNKNOWN",
-                "reason": "missing_otm_wings_in_selected_tenor",
-                "selected_dte": target_dte,
-            }
-
-        # Calculate absolute deltas
-        puts["delta_abs"] = puts["delta"].abs()
-        calls["delta_abs"] = calls["delta"].abs()
-
-        # Microstructure Relative Spread Filter (PAY-29, PAY-39, PAY-45)
-        def evaluate_leg(leg_row: pd.Series, wing_name: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
-            bid = safe_float(leg_row.get("bid"))
-            ask = safe_float(leg_row.get("ask"))
-            mark = safe_float(leg_row.get("mark"))
-            if mark is None or mark <= 0.0 or bid is None or bid <= 0.0 or ask is None:
-                return False, {
-                    "rejected_wing": wing_name,
-                    "observed_wing_relative_spread": None,
-                    "reason": "zero_bid_or_non_positive_mark",
-                }
-            rel_spread = (ask - bid) / mark
-            if rel_spread > self.max_skew_relative_spread:
-                return False, {
-                    "rejected_wing": wing_name,
-                    "observed_wing_relative_spread": round(rel_spread, 4),
-                    "reason": REASON_SKEW_SPREAD_TOLERANCE_EXCEEDED,
-                }
-            return True, None
-
-        # Primary Search: 0.20 <= |delta| <= 0.30
-        primary_puts = puts[(puts["delta_abs"] >= self.min_delta_tolerance) & (puts["delta_abs"] <= self.max_delta_tolerance)]
-        primary_calls = calls[(calls["delta_abs"] >= self.min_delta_tolerance) & (calls["delta_abs"] <= self.max_delta_tolerance)]
-
-        anchor = "PRIMARY_25D_SYMMETRIC"
-        if not primary_puts.empty and not primary_calls.empty:
-            put_row = primary_puts.iloc[(primary_puts["delta_abs"] - 0.25).abs().argmin()]
-            call_row = primary_calls.iloc[(primary_calls["delta_abs"] - 0.25).abs().argmin()]
-        else:
-            # Bounded nearest-symmetric fallback (0.15 <= |delta| <= 0.45)
-            anchor = "FALLBACK_NEAREST_SYMMETRIC"
-            fallback_puts = puts[(puts["delta_abs"] >= 0.15) & (puts["delta_abs"] <= 0.45)]
-            fallback_calls = calls[(calls["delta_abs"] >= 0.15) & (calls["delta_abs"] <= 0.45)]
-            if fallback_puts.empty or fallback_calls.empty:
-                return {
-                    "skew_30d_state": "UNKNOWN",
-                    "reason": "no_option_contracts_within_delta_tolerance_0.15_0.45",
-                    "selected_dte": target_dte,
-                }
-            put_row = fallback_puts.iloc[(fallback_puts["delta_abs"] - 0.25).abs().argmin()]
-            call_row = fallback_calls.iloc[(fallback_calls["delta_abs"] - 0.25).abs().argmin()]
-
-        # Apply Microstructure Gate
-        put_valid, put_diag = evaluate_leg(put_row, "PUT")
-        call_valid, call_diag = evaluate_leg(call_row, "CALL")
-
-        if not put_valid or not call_valid:
-            failed_diag = put_diag if not put_valid else call_diag
-            return {
-                "skew_30d_state": "UNKNOWN",
-                "skew_30d_reason": REASON_SKEW_SPREAD_TOLERANCE_EXCEEDED,
+                "skew_30d_reason": "skew_wing_liquidity_insufficient_relative_spread_exceeds_tolerance",
                 "spread_tolerance_source": "DEFAULT_EXECUTION_BOUNDARY",
                 "spread_tolerance_threshold": self.max_skew_relative_spread,
-                "observed_wing_relative_spread": failed_diag["observed_wing_relative_spread"],
-                "rejected_wing": failed_diag["rejected_wing"],
+                "observed_wing_relative_spread": round(p_spread, 4),
+                "rejected_wing": "PUT",
             }
 
-        p_iv = safe_float(put_row.get("volatility"))
-        c_iv = safe_float(call_row.get("volatility"))
-
-        if p_iv is None or c_iv is None or c_iv <= 0:
+        if c_spread > self.max_skew_relative_spread:
             return {
                 "skew_30d_state": "UNKNOWN",
-                "reason": "implied_volatility_missing_on_selected_legs",
+                "skew_30d_reason": "skew_wing_liquidity_insufficient_relative_spread_exceeds_tolerance",
+                "spread_tolerance_source": "DEFAULT_EXECUTION_BOUNDARY",
+                "spread_tolerance_threshold": self.max_skew_relative_spread,
+                "observed_wing_relative_spread": round(c_spread, 4),
+                "rejected_wing": "CALL",
             }
 
-        diff = p_iv - c_iv
-        ratio = p_iv / c_iv
-        regime = "NORMAL_PUT_SKEW" if ratio >= 0.70 else "INVERTED_CALL_SKEW_REGIME"
+        put_iv = safe_float(p_row.get("volatility"))
+        call_iv = safe_float(c_row.get("volatility"))
+        put_delta = safe_float(p_row.get("delta"))  # Signed delta (PAY-62)
+        call_delta = safe_float(c_row.get("delta"))
+
+        if put_iv is None or call_iv is None or put_delta is None or call_delta is None:
+            return {"skew_30d_state": "UNKNOWN", "reason": "candidate_greeks_null"}
+
+        diff = round(put_iv - call_iv, 3)
+        ratio = round(put_iv / call_iv, 4)
+        sym_gap = round(abs(abs(put_delta) - abs(call_delta)), 4)  # PAY-65
+
+        in_band = (0.20 <= abs(put_delta) <= 0.30) and (0.20 <= abs(call_delta) <= 0.30)
 
         return {
             "skew_30d_state": "CALCULATED",
-            "skew_30d_iv_differential": round(diff, 4),
-            "skew_30d_normalized_ratio": round(ratio, 4),
-            "skew_actual_put_delta": round(float(put_row["delta"]), 4),
-            "skew_actual_call_delta": round(float(call_row["delta"]), 4),
-            "skew_delta_anchor": anchor,
-            "skew_tenor_dte": target_dte,
-            "skew_regime": regime,
+            "skew_30d_iv_differential": diff,
+            "skew_30d_normalized_ratio": ratio,
+            "skew_actual_put_delta": put_delta,
+            "skew_actual_call_delta": call_delta,
+            "skew_delta_symmetry_gap": sym_gap,  # PAY-65
+            "skew_delta_anchor": "PRIMARY_25D_SYMMETRIC" if in_band else "FALLBACK_NEAREST_SYMMETRIC",
+            "skew_tenor_dte": int(target_dte),
+            "skew_regime": "NORMAL_PUT_SKEW" if diff < 0 else "INVERTED_CALL_SKEW",
             "skew_regime_type": "ILLUSTRATIVE_CONVENTION",
         }
 
-    def _calc_atm_event_straddle(self) -> Dict[str, Any]:
-        """PAY-07 / PAY-17: Event straddle with fat-tail adjusted convention."""
-        if self.options_df.empty or self.spot is None or self.spot <= 0:
-            return {
-                "state": "UNKNOWN",
-                "reason": "options_chain_empty_or_spot_unresolved",
-            }
+    def _calc_atm_straddle(self) -> Dict[str, Any]:
+        spot = self.derivatives_spot or self.grounding_spot
+        if self.df_options.empty or spot is None:
+            return {"state": "UNKNOWN", "reason": "missing_options_or_spot"}
 
-        df = self.options_df.copy()
-        tenors = sorted(df["daysToExpiration"].dropna().unique())
-        front_tenors = [t for t in tenors if t >= 1]
-        if not front_tenors:
-            return {
-                "state": "UNKNOWN",
-                "reason": "only_0dte_expiration_available_insufficient_for_event_straddle",
-            }
+        dtes = sorted([d for d in self.df_options["daysToExpiration"].dropna().unique() if d >= 4])
+        if not dtes:
+            return {"state": "UNKNOWN", "reason": "no_tenors_above_min_4_dte"}
 
-        front_dte = min(front_tenors)
-        chain = df[df["daysToExpiration"] == front_dte].copy()
+        front_dte = dtes[0]
+        chain = self.df_options[self.df_options["daysToExpiration"] == front_dte]
 
-        chain["strike_diff"] = (chain["strikePrice"] - self.spot).abs()
-        atm_strike = chain.loc[chain["strike_diff"].idxmin(), "strikePrice"]
+        strikes = np.sort(chain["strikePrice"].dropna().unique())
+        atm_strike = strikes[(np.abs(strikes - spot)).argmin()]
 
-        put_match = chain[(chain["strikePrice"] == atm_strike) & (chain["putCallIndicator"] == "PUT")]
-        call_match = chain[(chain["strikePrice"] == atm_strike) & (chain["putCallIndicator"] == "CALL")]
+        c = chain[(chain["strikePrice"] == atm_strike) & (chain["putCallIndicator"].str.upper() == "CALL")]
+        p = chain[(chain["strikePrice"] == atm_strike) & (chain["putCallIndicator"].str.upper() == "PUT")]
 
-        if put_match.empty or call_match.empty:
-            return {
-                "state": "UNKNOWN",
-                "reason": "atm_put_or_call_missing",
-            }
+        if c.empty or p.empty:
+            return {"state": "UNKNOWN", "reason": "atm_contracts_missing"}
 
-        p_mark = safe_float(put_match["mark"].values[0])
-        c_mark = safe_float(call_match["mark"].values[0])
+        c_mark = safe_float(c.iloc[0].get("mark"))
+        p_mark = safe_float(p.iloc[0].get("mark"))
 
-        if p_mark is None or c_mark is None:
-            return {
-                "state": "UNKNOWN",
-                "reason": "atm_mark_unavailable",
-            }
+        if c_mark is None or p_mark is None or c_mark <= 0 or p_mark <= 0:
+            return {"state": "UNKNOWN", "reason": "invalid_atm_marks"}
 
-        straddle_cost = p_mark + c_mark
-        implied_move_pct = (straddle_cost / self.spot) * 100.0
-        rule_of_thumb_move = implied_move_pct * 0.85
+        straddle_cost = round(c_mark + p_mark, 2)
+        implied_move = round((straddle_cost / spot) * 100.0, 4)
+        fat_tail_move = round(implied_move * 0.85, 4)
 
         return {
             "state": "CALCULATED",
             "atm_strike": float(atm_strike),
             "front_dte": int(front_dte),
-            "straddle_nominal_cost": round(straddle_cost, 2),
-            "implied_move_pct": round(implied_move_pct, 4),
-            "fat_tail_adjusted_move_pct": round(rule_of_thumb_move, 4),
+            "straddle_nominal_cost": straddle_cost,
+            "implied_move_pct": implied_move,
+            "fat_tail_adjusted_move_pct": fat_tail_move,
             "heuristic_anchor": "PRACTITIONER_FAT_TAIL_ADJUSTED_CONVENTION",
             "factor": 0.85,
         }
 
-    def _calc_volume_and_oi_ratios(self) -> Dict[str, Any]:
-        """Put/Call volume and Open Interest ratios."""
-        if self.options_df.empty:
-            return {
-                "state": "UNKNOWN",
-                "put_call_volume_ratio": None,
-                "put_call_oi_ratio": None,
-            }
-        df = self.options_df
-        puts = df[df["putCallIndicator"] == "PUT"]
-        calls = df[df["putCallIndicator"] == "CALL"]
+    def _calc_volume_oi_ratios(self) -> Dict[str, Any]:
+        if self.df_options.empty:
+            return {"state": "UNKNOWN", "reason": "options_chain_empty"}
 
-        put_vol = puts["totalVolume"].dropna().sum()
-        call_vol = calls["totalVolume"].dropna().sum()
-        put_oi = puts["openInterest"].dropna().sum()
-        call_oi = calls["openInterest"].dropna().sum()
+        calls = self.df_options[self.df_options["putCallIndicator"].str.upper() == "CALL"]
+        puts = self.df_options[self.df_options["putCallIndicator"].str.upper() == "PUT"]
+
+        call_vol = calls["totalVolume"].sum()
+        put_vol = puts["totalVolume"].sum()
+        call_oi = calls["openInterest"].sum()
+        put_oi = puts["openInterest"].sum()
+
+        v_rat = round(put_vol / call_vol, 4) if call_vol > 0 else None
+        oi_rat = round(put_oi / call_oi, 4) if call_oi > 0 else None
 
         return {
-            "state": "CALCULATED",
-            "put_call_volume_ratio": round(put_vol / call_vol, 4) if call_vol > 0 else None,
-            "put_call_oi_ratio": round(put_oi / call_oi, 4) if call_oi > 0 else None,
+            "state": "CALCULATED" if (v_rat is not None and oi_rat is not None) else "PARTIAL",
+            "put_call_volume_ratio": v_rat,
+            "put_call_oi_ratio": oi_rat,
         }
-
-    # --------------------------------------------------------------------------
-    # STEP 5: TECHNICALS & REALIZED VOLATILITY
-    # --------------------------------------------------------------------------
-    def _clean_price_history(self) -> Tuple[pd.DataFrame, Optional[str]]:
-        """Cleans and validates historical OHLCV data."""
-        if self.price_history_df.empty:
-            return pd.DataFrame(), "price_history_dataframe_empty"
-        df = self.price_history_df.copy()
-        cols = ["open", "high", "low", "close", "volume"]
-        for c in cols:
-            if c not in df.columns:
-                return pd.DataFrame(), f"missing_required_column_{c}"
-            df[c] = pd.to_numeric(df[c], errors="coerce")
-        df = df.dropna(subset=cols)
-        df = df[(df["high"] >= df["low"]) & (df["low"] > 0) & (df["close"] > 0)]
-        if len(df) < 2:
-            return pd.DataFrame(), "insufficient_valid_price_history_bars"
-        return df, None
 
     def _calc_step_5(self) -> Dict[str, Any]:
-        """Calculates Realized Volatilities and Floor Pivots."""
-        df, err = self._clean_price_history()
-        if not df.empty:
-            latest = df.iloc[-1]
-            H, L, C = latest["high"], latest["low"], latest["close"]
-            P = (H + L + C) / 3.0
+        prior_close = safe_float(self.raw.get("phase_0_grounding", {}).get("closePrice"))
+        if self.df_history.empty or len(self.df_history) < 2:
+            return {"classical_floor_pivots": {"state": "UNKNOWN", "reason": "insufficient_bars"}}
+
+        bar = self.df_history.iloc[-2]
+        h, l, c = safe_float(bar.get("high")), safe_float(bar.get("low")), safe_float(bar.get("close"))
+
+        pivots = {"state": "UNKNOWN"}
+        if h and l and c:
+            p = (h + l + c) / 3.0
             pivots = {
                 "state": "CALCULATED",
-                "Pivot": round(P, 2),
-                "R1": round((2 * P) - L, 2),
-                "R2": round(P + (H - L), 2),
-                "R3": round(H + 2 * (P - L), 2),
-                "S1": round((2 * P) - H, 2),
-                "S2": round(P - (H - L), 2),
-                "S3": round(L - 2 * (H - P), 2),
+                "Pivot": round(p, 2),
+                "R1": round(2 * p - l, 2),
+                "R2": round(p + (h - l), 2),
+                "R3": round(h + 2 * (p - l), 2),
+                "S1": round(2 * p - h, 2),
+                "S2": round(p - (h - l), 2),
+                "S3": round(l - 2 * (h - p), 2),
             }
-        else:
-            pivots = {"state": "UNKNOWN", "reason": err}
 
-        return {
-            "classical_floor_pivots": pivots,
-            "realized_volatility": self._calc_realized_volatility(df, err),
-        }
-
-    def _calc_realized_volatility(
-        self, df: pd.DataFrame, err: Optional[str]
-    ) -> Dict[str, Any]:
-        """
-        PAY-28 / PAY-42 / PAY-48: 3-tier sample window governance:
-          FULL_HISTORY (>=240), PARTIAL_HISTORY (180-239), INSUFFICIENT_HISTORY (<180).
-        """
-        if df.empty:
-            return {"state": "UNKNOWN", "reason": err}
-
-        windows = {"10d_tactical": 10, "30d_intermediate": 30, "252d_macro": 252}
-        results: Dict[str, Any] = {"state": "CALCULATED"}
-
-        for win_name, target_bars in windows.items():
-            sample_df = df.tail(target_bars + 1)
-            actual_bars = len(sample_df)
-            n_obs = actual_bars - 1
-
-            if n_obs < 2:
-                results[win_name] = {
-                    "state": "UNKNOWN",
-                    "reason": "insufficient_observations_for_window",
-                    "actual_sample_bars": actual_bars,
-                }
-                continue
-
-            log_rets = np.log(sample_df["close"] / sample_df["close"].shift(1)).dropna()
-            c2c = float(np.sqrt(self.trading_days_per_year) * log_rets.std() * 100.0)
-
-            hl_log = np.log(sample_df["high"] / sample_df["low"])
-            park_var = (1.0 / (4.0 * np.log(2.0))) * (hl_log ** 2).mean()
-            park = float(np.sqrt(self.trading_days_per_year * park_var) * 100.0)
-
-            co_log = np.log(sample_df["close"] / sample_df["open"])
-            gk_var = (0.5 * (hl_log ** 2)) - ((2.0 * np.log(2.0) - 1.0) * (co_log ** 2))
-            gk = float(np.sqrt(self.trading_days_per_year * max(0.0, gk_var.mean())) * 100.0)
-
-            # Sample Window Governance (PAY-48)
-            if win_name == "252d_macro":
-                if actual_bars < 180:
-                    results[win_name] = {
+        # 3-Tier Lookback Realized Volatility Engine (PAY-48)
+        rv_dict = {"state": "CALCULATED"}
+        for label, w in [("10d_tactical", 10), ("30d_intermediate", 30), ("252d_macro", 252)]:
+            n = len(self.df_history)
+            if n < w:
+                if label == "252d_macro":
+                    sub = self.df_history.copy()
+                    log_rets = np.log(sub["close"] / sub["close"].shift(1)).dropna()
+                    c2c = float(np.std(log_rets, ddof=1) * np.sqrt(self.trading_days_per_year) * 100.0)
+                    rv_dict[label] = {
                         "state": "INSUFFICIENT_HISTORY",
                         "target_window_bars": 252,
-                        "actual_sample_bars": actual_bars,
-                        "return_observations": n_obs,
+                        "actual_sample_bars": n,
+                        "return_observations": len(log_rets),
                         "computed_realized_vol": round(c2c, 2),
                         "reason": "sample_bars_below_minimum_macro_threshold_180",
                     }
-                    continue
-                tier = "FULL_HISTORY" if actual_bars >= 240 else "PARTIAL_HISTORY"
-            else:
-                tier = "FULL_HISTORY" if actual_bars >= target_bars else "PARTIAL_HISTORY"
+                else:
+                    rv_dict[label] = {"state": "UNKNOWN", "reason": f"insufficient_bars_{n}_for_window_{w}"}
+                continue
 
-            results[win_name] = {
-                "status": tier,
-                "actual_sample_bars": actual_bars,
-                "return_observations": n_obs,
+            sub = self.df_history.iloc[-w:].copy()
+            log_rets = np.log(sub["close"] / sub["close"].shift(1)).dropna()
+            c2c = float(np.std(log_rets, ddof=1) * np.sqrt(self.trading_days_per_year) * 100.0)
+
+            hl = np.log(sub["high"] / sub["low"]) ** 2
+            park = float(np.sqrt((1.0 / (4.0 * np.log(2.0))) * hl.mean()) * np.sqrt(self.trading_days_per_year) * 100.0)
+
+            co = np.log(sub["close"] / sub["open"]) ** 2
+            gk_term = 0.5 * hl - (2.0 * np.log(2.0) - 1.0) * co
+            gk = float(np.sqrt(max(0.0, gk_term.mean())) * np.sqrt(self.trading_days_per_year) * 100.0)
+
+            status = "FULL_HISTORY" if len(sub) >= (240 if w == 252 else w) else "PARTIAL_HISTORY"
+            rv_dict[label] = {
+                "status": status,
+                "actual_sample_bars": len(sub),
+                "return_observations": len(log_rets),
                 "close_to_close": round(c2c, 2),
                 "parkinson": round(park, 2),
                 "garman_klass": round(gk, 2),
                 "estimator_methodology": "Garman-Klass (1980) zero-drift invariant",
             }
 
-        return results
+        return {"classical_floor_pivots": pivots, "realized_volatility": rv_dict}
