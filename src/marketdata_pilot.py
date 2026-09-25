@@ -2,30 +2,6 @@
 marketdata_pilot.py
 -----------------------------------------------------------------------------
 Institutional-Grade Schwab Market Data Orchestrator & Production Extraction Engine.
-
-Designed for: Global Equity Strategy, Market Risk Systems, and Automated Pipelines.
-
-Production Extraction Guarantees:
-1. Zero Hard-Coded Symbols:
-   - All extraction functions, orchestrators, and diagnostic flows require the caller
-     to explicitly supply the ticker symbols or universe lists.
-2. Production Normalization Pipeline:
-   - Built-in DataFrame transformations for multi-asset quotes, 20-year daily historical
-     OHLCV timeseries, and full volatility/Greeks surfaces.
-3. Zero Secret Ingestion:
-   - Credentials are held strictly in ephemeral variables and never written back to
-     global runtime tables or `os.environ`.
-4. Cryptographic CSRF Protection (RFC 6749):
-   - Generates high-entropy nonces via Python's `secrets` module during authorization
-     and asserts strict parity before initiating token code exchange.
-5. Dual-Tier OAuth Protocol:
-   - Tier 1: Proactive silent renewal (30-minute window) using cached refresh token.
-   - Tier 2: Deterministic full OAuth restart on token revocation, technical failures,
-     CAG/LMS scope modifications, or administrative override (`force_reauth=True`).
-6. Precision Failure Boundary:
-   - Differentiates between authentication failures (which initiate an OAuth handshake)
-     and upstream gateway/asset errors (which fail fast).
------------------------------------------------------------------------------
 """
 
 from __future__ import annotations
@@ -38,8 +14,10 @@ import re
 import secrets
 import sys
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -71,19 +49,10 @@ except ImportError as exc:
 logger = logging.getLogger("schwab_orchestrator")
 logger.addHandler(logging.NullHandler())
 
-# Strict symbol regex supporting equities, multi-class shares, futures, options, and indices
 SYMBOL_REGEX = re.compile(r"^[\$A-Z0-9.\-_/ ]{1,30}$")
 
-
-# ---------------------------------------------------------------------------
-# STRUCTURED DATA MODELS & EXCEPTIONS
-# ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class RunResult:
-    """
-    Immutable execution contract returned by run_marketdata_flow.
-    Guarantees deterministic structure for downstream algorithmic consumption.
-    """
     success: bool
     symbol: str
     data: Optional[Dict[str, Any]] = None
@@ -91,27 +60,19 @@ class RunResult:
     session_resumed: bool = False
     forced_restart: bool = False
 
-
 class OrchestratorError(SchwabClientError):
-    """Base exception for workflow orchestration failures."""
-
+    pass
 
 class CredentialResolutionError(OrchestratorError):
-    """Raised when authentication credentials cannot be securely located."""
+    pass
 
-
-# ---------------------------------------------------------------------------
-# SECURE CREDENTIAL RESOLUTION (ZERO-POLLUTION HIERARCHY)
-# ---------------------------------------------------------------------------
 def _get_colab_secret(key: str) -> Optional[str]:
-    """Attempts extraction from Google Colab userdata secrets vault."""
     try:
         from google.colab import userdata  # type: ignore
         val = userdata.get(key)
         return str(val).strip() if val else None
     except Exception:
         return None
-
 
 def _resolve_credential(
     key: str,
@@ -121,15 +82,6 @@ def _resolve_credential(
     interactive: bool = True,
     secret_provider: Optional[Callable[[str], Optional[str]]] = None,
 ) -> str:
-    """
-    Resolves credentials via strict precedence:
-      1. Enterprise Secret Provider callback (HashiCorp Vault, AWS Secrets Manager)
-      2. Google Colab User Secrets Vault
-      3. OS Environment Variable (read-only inspection)
-      4. Masked Interactive Prompt (terminal or notebook fallback)
-
-    Crucial Security Rule: Resolved values are NEVER injected back into `os.environ`.
-    """
     if secret_provider:
         try:
             val = secret_provider(key)
@@ -163,15 +115,7 @@ def _resolve_credential(
         "Colab Secrets, environment variable, or interactive prompt."
     )
 
-
-# ---------------------------------------------------------------------------
-# SECURE STORAGE RESOLUTION
-# ---------------------------------------------------------------------------
 def resolve_secure_token_path() -> Path:
-    """
-    Determines an isolated, permission-controlled path for token persistence.
-    Enforces POSIX 0o700 directory permissions to block cross-user inspection.
-    """
     explicit_path = os.environ.get("SCHWAB_TOKEN_PATH")
     if explicit_path and explicit_path.strip():
         target = Path(explicit_path).expanduser().resolve()
@@ -188,15 +132,9 @@ def resolve_secure_token_path() -> Path:
         os.chmod(parent_dir, 0o700)
     except OSError:
         pass
-
     return target
 
-
 def _sanitize_and_validate_symbols(raw_symbol: Union[str, List[str]]) -> str:
-    """
-    Validates and standardizes ticker formats against capital-market regex patterns.
-    Prevents parameter injection, whitespace corruption, and malformed queries.
-    """
     if isinstance(raw_symbol, list):
         candidates = [str(s).strip().upper() for s in raw_symbol if str(s).strip()]
     elif isinstance(raw_symbol, str):
@@ -210,26 +148,47 @@ def _sanitize_and_validate_symbols(raw_symbol: Union[str, List[str]]) -> str:
     for sym in candidates:
         if not SYMBOL_REGEX.match(sym):
             raise ValueError(
-                f"Security validation failed: Symbol '{sym}' contains illegal characters. "
-                "Must be alphanumeric or approved index/share delimiters ($, ., -, /, space)."
+                f"Security validation failed: Symbol '{sym}' contains illegal characters."
             )
-
     return ",".join(candidates)
 
+def build_schwab_client(
+    *,
+    token_file_path: Optional[Union[str, Path]] = None,
+    interactive: bool = True,
+    secret_provider: Optional[Callable[[str], Optional[str]]] = None,
+) -> SchwabClient:
+    try:
+        resolved_token_path = (
+            Path(token_file_path).resolve() if token_file_path else resolve_secure_token_path()
+        )
+        client_id = _resolve_credential(
+            "SCHWAB_CLIENT_ID",
+            "Enter Schwab Client ID (App Key)",
+            is_secret=False,
+            interactive=interactive,
+            secret_provider=secret_provider,
+        )
+        client_secret = _resolve_credential(
+            "SCHWAB_CLIENT_SECRET",
+            "Enter Schwab Client Secret",
+            is_secret=True,
+            interactive=interactive,
+            secret_provider=secret_provider,
+        )
+        redirect_uri = os.environ.get("SCHWAB_REDIRECT_URI", "https://127.0.0.1")
 
-# ---------------------------------------------------------------------------
-# INSTITUTIONAL NORMALIZATION & ANALYTICAL PARSERS
-# ---------------------------------------------------------------------------
+        return SchwabClient(
+            client_id=client_id,
+            client_secret=client_secret,
+            redirect_uri=redirect_uri,
+            token_file_path=resolved_token_path,
+        )
+    except Exception as exc:
+        logger.error("Client initialization failed: %s", exc)
+        raise RuntimeError(f"Schwab client setup error: {exc}") from exc
+
 def parse_price_history_to_df(history_payload: Dict[str, Any]) -> pd.DataFrame:
-    """
-    Normalizes a Schwab PriceHistory payload into an institutional OHLCV DataFrame.
-
-    Features:
-      - Validates 'empty' flag to prevent downstream runtime indexing faults.
-      - Converts Unix epoch milliseconds to UTC timestamps, then localizes to US/Eastern.
-      - Enforces strict type casting: float64 for price series, int64 for volume.
-      - Guarantees sorted, unique DatetimeIndex.
-    """
     if not isinstance(history_payload, dict) or history_payload.get("empty", True):
         logger.warning("Empty or invalid price history payload provided.")
         return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
@@ -240,7 +199,6 @@ def parse_price_history_to_df(history_payload: Dict[str, Any]) -> pd.DataFrame:
         return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
 
     df = pd.DataFrame(candles)
-
     required_cols = {"datetime", "open", "high", "low", "close", "volume"}
     if not required_cols.issubset(df.columns):
         missing = required_cols - set(df.columns)
@@ -252,21 +210,9 @@ def parse_price_history_to_df(history_payload: Dict[str, Any]) -> pd.DataFrame:
 
     df[["open", "high", "low", "close"]] = df[["open", "high", "low", "close"]].astype(float)
     df["volume"] = df["volume"].astype("int64")
-
     return df[["open", "high", "low", "close", "volume"]]
 
-
 def parse_option_chain_to_df(chain_payload: Dict[str, Any]) -> pd.DataFrame:
-    """
-    Normalizes Schwab option chain nested maps into an institutional Volatility Surface.
-
-    Features:
-      - Traverses dual multi-tier structures: callExpDateMap and putExpDateMap.
-      - Parses the composite expiration key ('YYYY-MM-DD:DTE') into distinct columns.
-      - Extracts first-order and second-order Greeks (Delta, Gamma, Vega, Theta).
-      - Computes moneyness relative to the underlying spot price.
-      - Guards against null, empty, or non-tradable contract nodes.
-    """
     if not isinstance(chain_payload, dict):
         logger.warning("Invalid chain payload received.")
         return pd.DataFrame()
@@ -335,15 +281,9 @@ def parse_option_chain_to_df(chain_payload: Dict[str, Any]) -> pd.DataFrame:
     if not df.empty:
         df.sort_values(by=["expiration", "strike", "side"], inplace=True)
         df.reset_index(drop=True, inplace=True)
-
     return df
 
-
 def parse_quotes_to_df(quotes_payload: Dict[str, Any]) -> pd.DataFrame:
-    """
-    Transforms multi-symbol quotes payload into a structured risk metrics DataFrame.
-    Defensively extracts quote, fundamental, and reference blocks.
-    """
     if not isinstance(quotes_payload, dict):
         return pd.DataFrame()
 
@@ -377,10 +317,225 @@ def parse_quotes_to_df(quotes_payload: Dict[str, Any]) -> pd.DataFrame:
         df.set_index("ticker", inplace=True)
     return df
 
+def extract_market_open_status(client: SchwabClient, tz: ZoneInfo) -> Optional[bool]:
+    """Queries Schwab to determine whether the equity market is open today."""
+    try:
+        now_et = datetime.now(timezone.utc).astimezone(tz)
+        date_str = now_et.strftime("%Y-%m-%d")
+        if hasattr(client, "get_market_hours"):
+            # Attempt standard call without 'date' keyword
+            try:
+                raw_hours = client.get_market_hours("equity")
+            except TypeError:
+                try:
+                    raw_hours = client.get_market_hours(markets="equity")
+                except TypeError:
+                    raw_hours = client.get_market_hours()
 
-# ---------------------------------------------------------------------------
-# CORE WORKFLOW: MARKET DATA RETRIEVAL
-# ---------------------------------------------------------------------------
+            # Handle both nested {equity: {EQ: {isOpen: ...}}} and root {isOpen: ...}
+            if isinstance(raw_hours, dict):
+                if "isOpen" in raw_hours:
+                    return raw_hours.get("isOpen", False)
+                return raw_hours.get("equity", {}).get("EQ", {}).get("isOpen", False)
+    except Exception as exc:
+        logger.warning("MarketHours retrieval skipped: %s", exc)
+    return None
+
+def extract_strict_underlying_data(client: SchwabClient, symbol: str, tz: ZoneInfo) -> Dict[str, Any]:
+    clean_sym = _sanitize_and_validate_symbols(symbol)
+    raw_payload = client.get_quote(symbol=clean_sym, fields="quote,fundamental,reference")
+    payload = raw_payload.get(clean_sym, raw_payload)
+
+    quote_c = payload.get("quote", {})
+    fund_c = payload.get("fundamental", {})
+    ref_c = payload.get("reference", {})
+
+    inst_fund_c = {}
+    try:
+        if hasattr(client, "get_instruments"):
+            inst_payload = client.get_instruments(symbol=clean_sym, projection="fundamental")
+            inst_list = inst_payload.get("instruments", [])
+            if inst_list and isinstance(inst_list, list):
+                inst_fund_c = inst_list[0].get("fundamental", {})
+            elif isinstance(inst_payload, dict):
+                inst_fund_c = inst_payload.get("fundamental", {})
+    except Exception as exc:
+        logger.info("Instruments query skipped: %s", exc)
+
+    def resolve(field: str) -> Any:
+        val = fund_c.get(field)
+        return inst_fund_c.get(field) if val is None or pd.isna(val) else val
+
+    quote_epoch = quote_c.get("quoteTime")
+    quote_iso = None
+    if quote_epoch and not pd.isna(quote_epoch) and quote_epoch > 0:
+        quote_iso = datetime.fromtimestamp(quote_epoch / 1000.0, tz=timezone.utc).astimezone(tz).isoformat()
+
+    return {
+        "phase_0_grounding": {
+            "symbol": clean_sym,
+            "lastPrice": quote_c.get("lastPrice"),
+            "quoteTime_ISO_ET": quote_iso,
+            "closePrice": quote_c.get("closePrice"),
+        },
+        "step_1_fundamentals": {
+            "beta": fund_c.get("beta"),
+            "peRatio": fund_c.get("peRatio"),
+            "pegRatio": fund_c.get("pegRatio"),
+            "pbRatio": fund_c.get("pbRatio"),
+            "prRatio": fund_c.get("prRatio"),
+            "pcfRatio": fund_c.get("pcfRatio"),
+            "quickRatio": fund_c.get("quickRatio"),
+            "currentRatio": fund_c.get("currentRatio"),
+            "totalDebtToEquity": fund_c.get("totalDebtToEquity"),
+            "grossMarginTTM": resolve("grossMarginTTM"),
+            "netProfitMarginTTM": resolve("netProfitMarginTTM"),
+            "operatingMarginTTM": resolve("operatingMarginTTM"),
+            "returnOnEquity": fund_c.get("returnOnEquity"),
+            "returnOnAssets": fund_c.get("returnOnAssets"),
+            "eps": fund_c.get("eps"),
+            "revChangeYear": resolve("revChangeYear"),
+            "divYield": fund_c.get("divYield"),
+            "divAmount": fund_c.get("divAmount"),
+            "divFreq": fund_c.get("divFreq"),
+            "divDate": fund_c.get("divDate"),
+            "sharesOutstanding": resolve("sharesOutstanding"),
+            "sharesFloat": resolve("sharesFloat"),
+        },
+        "step_3_short_reference": {
+            "isShortable": ref_c.get("isShortable"),
+            "isHardToBorrow": ref_c.get("isHardToBorrow"),
+            "htbRate": ref_c.get("htbRate"),
+        },
+        "step_8_liquidity_sizing": {
+            "bidPrice": quote_c.get("bidPrice"),
+            "askPrice": quote_c.get("askPrice"),
+            "bidSize": quote_c.get("bidSize"),
+            "askSize": quote_c.get("askSize"),
+            "totalVolume": quote_c.get("totalVolume"),
+            "vol10DayAvg": fund_c.get("vol10DayAvg"),
+            "vol3MonthAvg": fund_c.get("vol3MonthAvg"),
+        },
+    }
+
+def extract_in_memory_price_history(
+    client: SchwabClient,
+    symbol: str,
+    config: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    clean_sym = _sanitize_and_validate_symbols(symbol)
+    cfg = config or {}
+    try:
+        raw = client.get_price_history(
+            symbol=clean_sym,
+            period_type=cfg.get("HISTORICAL_PERIOD_TYPE", "year"),
+            period=cfg.get("HISTORICAL_PERIOD", 1),
+            frequency_type=cfg.get("HISTORICAL_FREQUENCY_TYPE", "daily"),
+            frequency=cfg.get("HISTORICAL_FREQUENCY", 1),
+            need_extended_hours=cfg.get("HISTORICAL_NEED_EXTENDED_HOURS", False),
+        )
+        try:
+            df = parse_price_history_to_df(raw)
+            df = df.reset_index()
+        except Exception:
+            df = pd.DataFrame(raw.get("candles", []))
+
+        if df.empty:
+            return []
+        cols = ["datetime", "open", "high", "low", "close", "volume"]
+        existing = [c for c in cols if c in df.columns]
+        return df[existing].to_dict(orient="records")
+    except Exception as exc:
+        logger.error("PriceHistory query failed: %s", exc)
+        return []
+
+def extract_in_memory_option_expirations(client: SchwabClient, symbol: str) -> List[Dict[str, Any]]:
+    clean_sym = _sanitize_and_validate_symbols(symbol)
+    try:
+        payload = client.get_option_expirations(clean_sym)
+        exp_list = payload.get("expirationList", [])
+        if not exp_list:
+            return []
+        df = pd.DataFrame(exp_list)
+        cols = ["expirationDate", "daysToExpiration"]
+        existing = [c for c in cols if c in df.columns]
+        return df[existing].sort_values("daysToExpiration").to_dict(orient="records")
+    except Exception as exc:
+        logger.error("OptionExpirations query failed: %s", exc)
+        return []
+
+def resolve_optimal_expirations(expirations: List[Dict[str, Any]]) -> List[str]:
+    if not expirations:
+        return []
+    valid_exps = [e for e in expirations if e.get("daysToExpiration", 0) > 0]
+    if not valid_exps:
+        valid_exps = expirations
+
+    front_exp = min(valid_exps, key=lambda x: x["daysToExpiration"])["expirationDate"]
+    thirty_dte_exp = min(valid_exps, key=lambda x: abs(x["daysToExpiration"] - 30))["expirationDate"]
+    return sorted(list({front_exp, thirty_dte_exp}))
+
+def extract_in_memory_option_chains(
+    client: SchwabClient,
+    symbol: str,
+    target_expirations: List[str],
+    strike_count: int = 14,
+    strategy: str = "SINGLE",
+    include_quote: bool = False,
+) -> Tuple[Optional[float], List[Dict[str, Any]]]:
+    clean_sym = _sanitize_and_validate_symbols(symbol)
+    vol_30d = None
+    records: List[Dict[str, Any]] = []
+
+    if not target_expirations:
+        return None, []
+
+    for exp_date in target_expirations:
+        try:
+            raw_chain = client.get_option_chain(
+                symbol=clean_sym,
+                contract_type="ALL",
+                strike_count=strike_count,
+                include_underlying_quote=include_quote,
+                strategy=strategy,
+                from_date=exp_date,
+                to_date=exp_date,
+            )
+
+            if vol_30d is None:
+                vol_30d = raw_chain.get("volatility")
+
+            def parse_map(exp_map: Dict[str, Any], flag: str):
+                if not isinstance(exp_map, dict):
+                    return
+                for exp_key, strike_map in exp_map.items():
+                    dte = int(exp_key.split(":")[1]) if ":" in exp_key else None
+                    if not isinstance(strike_map, dict):
+                        continue
+                    for _, contracts in strike_map.items():
+                        if not isinstance(contracts, list):
+                            continue
+                        for c in contracts:
+                            records.append({
+                                "putCallIndicator": c.get("putCallIndicator", flag),
+                                "daysToExpiration": c.get("daysToExpiration", dte),
+                                "strikePrice": c.get("strikePrice"),
+                                "mark": c.get("mark"),
+                                "totalVolume": c.get("totalVolume"),
+                                "openInterest": c.get("openInterest"),
+                                "volatility": c.get("volatility"),
+                                "delta": c.get("delta"),
+                            })
+
+            parse_map(raw_chain.get("callExpDateMap", {}), "CALL")
+            parse_map(raw_chain.get("putExpDateMap", {}), "PUT")
+
+        except Exception as exc:
+            logger.error("OptionChains extraction failed for %s on %s: %s", clean_sym, exp_date, exc)
+            continue
+
+    return vol_30d, records
+
 def run_marketdata_flow(
     symbols: Union[str, List[str]],
     *,
@@ -391,10 +546,6 @@ def run_marketdata_flow(
     token_file_path: Optional[Union[str, Path]] = None,
     client_kwargs: Optional[Dict[str, Any]] = None,
 ) -> RunResult:
-    """
-    Executes the market data retrieval lifecycle with full dual-tier OAuth support.
-    Requires caller to supply target symbol(s).
-    """
     validated_symbols = _sanitize_and_validate_symbols(symbols)
     resolved_token_path = (
         Path(token_file_path).resolve() if token_file_path else resolve_secure_token_path()
@@ -432,8 +583,6 @@ def run_marketdata_flow(
         token_file_path=resolved_token_path,
         **kwargs,
     ) as client:
-
-        # Step A: Attempt execution using cached or silently refreshed session
         if not force_reauth:
             try:
                 quote_payload = client.get_quotes(validated_symbols, fields=fields)
@@ -460,7 +609,6 @@ def run_marketdata_flow(
                         forced_restart=False,
                     )
 
-        # Step B: Full OAuth Flow Restart (CAG / LMS Consent Handshake)
         if not interactive:
             err_msg = (
                 "Execution halted: Session expired or OAuth restart required, "
@@ -502,7 +650,6 @@ def run_marketdata_flow(
                 session_resumed=False,
                 forced_restart=force_reauth,
             )
-
         except (TokenError, APIRequestError, OrchestratorError) as exc:
             logger.error("OAuth handshake failed: %s", exc)
             return RunResult(
@@ -516,10 +663,6 @@ def run_marketdata_flow(
             logger.exception("Catastrophic error during OAuth handshake: %s", exc)
             raise OrchestratorError(f"Handshake pipeline failure: {exc}") from exc
 
-
-# ---------------------------------------------------------------------------
-# PRODUCTION EXTRACTION ENGINE: TIMESERIES & DERIVATIVES
-# ---------------------------------------------------------------------------
 def extract_historical_timeseries(
     symbol: str,
     *,
@@ -532,15 +675,10 @@ def extract_historical_timeseries(
     force_reauth: bool = False,
     token_file_path: Optional[Union[str, Path]] = None,
 ) -> pd.DataFrame:
-    """
-    Production-grade historical timeseries extraction.
-    Pulls up to 20 years of OHLCV bars and parses directly into a clean DataFrame.
-    """
     clean_sym = _sanitize_and_validate_symbols(symbol)
     resolved_token_path = (
         Path(token_file_path).resolve() if token_file_path else resolve_secure_token_path()
     )
-
     client_id = _resolve_credential("SCHWAB_CLIENT_ID", "Enter Schwab Client ID", is_secret=False, interactive=interactive)
     client_secret = _resolve_credential("SCHWAB_CLIENT_SECRET", "Enter Schwab Client Secret", is_secret=True, interactive=interactive)
     redirect_uri = os.environ.get("SCHWAB_REDIRECT_URI", "https://127.0.0.1")
@@ -571,18 +709,10 @@ def extract_volatility_surface(
     force_reauth: bool = False,
     token_file_path: Optional[Union[str, Path]] = None,
 ) -> pd.DataFrame:
-    """
-    Production-grade option surface extraction with automatic tenor chunking.
-
-    Solves the Apigee 'protocol.http.TooBigBody' (HTTP 502) gateway buffer overflow
-    by querying the active expiration calendar via /expirationchain and pulling
-    full-strike chains per expiration slice when strike_count is None.
-    """
     clean_sym = _sanitize_and_validate_symbols(symbol)
     resolved_token_path = (
         Path(token_file_path).resolve() if token_file_path else resolve_secure_token_path()
     )
-
     client_id = _resolve_credential(
         "SCHWAB_CLIENT_ID", "Enter Schwab Client ID", is_secret=False, interactive=interactive
     )
@@ -597,8 +727,6 @@ def extract_volatility_surface(
         redirect_uri=redirect_uri,
         token_file_path=resolved_token_path,
     ) as client:
-
-        # Fast path: Bounded strike queries fit comfortably inside the proxy buffer
         if strike_count is not None or not chunk_by_expiration:
             raw_chain = client.get_option_chain(
                 symbol=clean_sym,
@@ -607,7 +735,6 @@ def extract_volatility_surface(
             )
             return parse_option_chain_to_df(raw_chain)
 
-        # Resilient path: Chunk across expirations to avoid HTTP 502 buffer overflows
         logger.info("Extracting full surface for %s via expiration calendar chunking...", clean_sym)
         exp_payload = client.get_option_expirations(clean_sym)
         expirations = [
@@ -621,7 +748,6 @@ def extract_volatility_surface(
             return pd.DataFrame()
 
         surface_slices: List[pd.DataFrame] = []
-
         for exp_date in expirations:
             try:
                 chunk_chain = client.get_option_chain(
@@ -646,9 +772,6 @@ def extract_volatility_surface(
         df_full.reset_index(drop=True, inplace=True)
         return df_full
 
-# ---------------------------------------------------------------------------
-# AUDIT WORKFLOW: COMPREHENSIVE 7-ENDPOINT CATALOG
-# ---------------------------------------------------------------------------
 def run_full_marketdata_catalog(
     symbol: str,
     benchmark_index: str,
@@ -664,10 +787,6 @@ def run_full_marketdata_catalog(
     token_file_path: Optional[Union[str, Path]] = None,
     client_kwargs: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """
-    Audits and queries all 7 Schwab Market Data endpoint families for a given asset.
-    Requires caller to supply target symbol and benchmark index.
-    """
     clean_symbol = _sanitize_and_validate_symbols(symbol)
     resolved_token_path = (
         Path(token_file_path).resolve() if token_file_path else resolve_secure_token_path()
@@ -705,7 +824,6 @@ def run_full_marketdata_catalog(
         token_file_path=resolved_token_path,
         **kwargs,
     ) as client:
-
         try:
             client.get_valid_access_token()
         except TokenError:
@@ -801,10 +919,6 @@ def run_full_marketdata_catalog(
         print("-" * 82 + "\n")
         return snapshot
 
-
-# ---------------------------------------------------------------------------
-# CLI INTERFACE & DISPATCHER
-# ---------------------------------------------------------------------------
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Institutional Charles Schwab Market Data Orchestration Engine",
@@ -850,9 +964,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     )
     return parser
 
-
 def main(argv: Optional[List[str]] = None) -> int:
-    """CLI execution entrypoint adhering to standard POSIX status codes."""
     parser = _build_arg_parser()
     args = parser.parse_args(argv)
 
@@ -865,7 +977,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         if args.audit_catalog:
             if not args.benchmark:
-                print("[ERROR] Argument --benchmark ($SPX, $COMPX, $DJI) is required when --audit-catalog is enabled.", file=sys.stderr)
+                print(
+                    "[ERROR] Argument --benchmark ($SPX, $COMPX, $DJI) is required when --audit-catalog is enabled.",
+                    file=sys.stderr,
+                )
                 return 2
 
             run_full_marketdata_catalog(
@@ -901,7 +1016,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     except Exception as exc:
         print(f"\n[FATAL ORCHESTRATOR FAILURE] {exc}", file=sys.stderr)
         return 3
-
 
 if __name__ == "__main__":
     sys.exit(main())
