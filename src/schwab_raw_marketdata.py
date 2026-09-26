@@ -272,9 +272,11 @@ def extract_strict_underlying_data(
         q_time_iso = None
         q_age = None
 
+    def _functionally_zero(v: Optional[float]) -> bool:
+        return v is None or abs(v) < 0.01
+
     is_halted_or_unquoted = (
-        (last_p is None and close_p is None)
-        or (last_p == 0.0 and close_p == 0.0)
+        (_functionally_zero(last_p) and _functionally_zero(close_p))
         or (desc == "" and last_p is None)
     )
 
@@ -629,7 +631,7 @@ def extract_in_memory_price_history(
         "period": p_val,
         "frequency_type": f_type,
         "frequency": f_val,
-        "need_extended_hours_data": ext_hrs,
+        "need_extended_hours": ext_hrs,
     }
 
     @retry_vendor_call(max_retries=3, base_delay=0.25)
@@ -806,7 +808,7 @@ def extract_in_memory_option_chains(
             if parsed and ("callExpDateMap" in parsed or "putExpDateMap" in parsed):
                 telemetry["fallback_to_default_chain"] = True
                 _parse_chain_payload(parsed, provenance="DEFAULT_CHAIN_FALLBACK")
-        except (KeyError, ValueError, TypeError, AttributeError) as e:
+        except Exception as e:
             logger.warning("Default chain fallback failed for %s: %s", clean_sym, e)
 
     return vol_30d, underlying_price, all_contracts, telemetry

@@ -260,6 +260,13 @@ class MasterThesisCalculator:
             calc["pe_eps_disparity_state"] = "NEGATIVE_REPORTED_PE_POSITIVE_EPS"
             calc["implied_trailing_pe"] = round(imp_pe, 2)
             calc["pe_basis_note"] = "reported_pe_reflects_negative_forward_consensus_vs_positive_trailing_eps"
+        elif not is_etn and pe and pe > 0 and (eps is None or eps < 0.0):
+            calc["pe_eps_vintage_disparity"] = True
+            calc["pe_eps_disparity_state"] = "POSITIVE_REPORTED_PE_NEGATIVE_EPS"
+            if eps is not None and eps < 0.0:
+                calc["pe_basis_note"] = "reported_pe_positive_while_trailing_eps_negative_unreconciled"
+            else:
+                calc["pe_basis_note"] = "reported_pe_positive_while_trailing_eps_unavailable"
         elif not is_etn and pe and pe > 0 and imp_pe and imp_pe > 0:
             abs_delta = abs(pe - imp_pe)
             if abs_delta < 0.05 or pe <= 0.05 or imp_pe <= 0.05:
