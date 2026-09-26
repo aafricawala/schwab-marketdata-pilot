@@ -1,4 +1,7 @@
-# schwab_marketdata_calculator.py
+"""
+schwab_marketdata_calculator.py
+
+"""
 from __future__ import annotations
 import math
 from typing import Any, Dict, Optional

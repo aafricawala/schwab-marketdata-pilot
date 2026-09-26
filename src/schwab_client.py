@@ -1,39 +1,5 @@
 """
 schwab_client.py
------------------------------------------------------------------------------
-Institutional-Grade Charles Schwab OAuth2 & Market Data API Client.
-
-Designed for: Global Equity Strategy, Market Risk Systems, and Quant Research.
-
-Core Architecture & Security Features:
-1. Strict Callback URL Verification:
-   - Validates URI length (<= 255 characters per Schwab portal constraints).
-   - Enforces HTTPS scheme as required by Schwab Login Micro Site (LMS).
-   - Rejects whitespace characters.
-   - Normalizes trailing slashes on bare host/IP roots (e.g., 'https://127.0.0.1/' -> 'https://127.0.0.1')
-     to prevent byte-level string mismatches during token authorization.
-2. Cryptographic CSRF Defense (RFC 6749 Section 10.12):
-   - Enforces state nonces across authorization requests and validates parity
-     prior to code exchange.
-3. Low-Level Token Storage Isolation:
-   - Uses low-level OS file descriptors (os.open with O_CREAT | O_TRUNC | O_WRONLY | O_NOFOLLOW)
-     with POSIX 0o600 permissions at creation, eliminating umask race windows.
-4. Concurrency & Thread Safety:
-   - Implements double-checked locking primitives to eliminate refresh stampedes
-     while maintaining zero lock contention on fast-path memory reads.
-5. Resilient Transport Layer:
-   - Hardened connection pooling via HTTPAdapter to prevent socket exhaustion.
-   - Proactive early token renewal (60s buffer) + Reactive 401 self-healing recovery loop.
-   - HTTP 429 rate-limit adherence via RFC-7231 / integer Retry-After parsing with entropy jitter.
-   - Exponential backoff on transient 5xx server errors.
-6. Comprehensive Diagnostic Logging:
-   - Ingests Schwab's structured JSON error schema:
-     {"errors": [{"status": ..., "title": ..., "detail": ..., "id": ...}]}
-   - Surfaces 'Schwab-Client-CorrelId' and 'Schwab-Resource-Version' across all failure modes.
-7. Unbounded Asset Class Coverage:
-   - Parameterized access across all 7 Market Data endpoint families with zero
-     hard-coded ticker symbols.
------------------------------------------------------------------------------
 """
 
 from __future__ import annotations

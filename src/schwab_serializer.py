@@ -1,4 +1,8 @@
-# schwab_serializer.py
+"""
+schwab_serializer.py
+
+"""
+
 from __future__ import annotations
 import json
 import logging
