@@ -24,13 +24,6 @@ CURRENCY_KEYS: Set[str] = {
     "ask",
 }
 
-EXCLUDED_FORMAT_PREFIXES: Tuple[str, ...] = (
-    "calculated_metrics",
-    "step_1_fundamentals_and_quality",
-    "step_5_technicals_and_flows",
-    "step_3_and_7_derivatives_and_surface",
-)
-
 PRESERVE_NULL_CONTAINERS: Set[str] = {
     "phase_0_grounding",
     "market_cap_divergence",
@@ -42,6 +35,8 @@ PRESERVE_NULL_CONTAINERS: Set[str] = {
     "skew_30d",
     "flow_ratios",
 }
+
+SAFE_INTEGER_LIMIT = 2**53 - 1
 
 
 def sanitize_payload_for_serialization(
@@ -60,34 +55,33 @@ def sanitize_payload_for_serialization(
             for item in obj.tolist()
         ]
 
-    in_excluded_scope = any(
-        current_path == prefix or current_path.startswith(f"{prefix}.")
-        for prefix in EXCLUDED_FORMAT_PREFIXES
-    )
+    root_section = current_path.split(".")[0] if current_path else ""
+    in_calc_scope = (root_section == "calculated_metrics")
 
     if isinstance(obj, (np.floating, float)):
         if math.isnan(obj) or math.isinf(obj):
             return None
-        if not in_excluded_scope and key_name in CURRENCY_KEYS:
+        if not in_calc_scope and key_name in CURRENCY_KEYS:
             return f"${float(obj):,.2f}"
-        if in_excluded_scope:
+        if in_calc_scope:
             flt_val = float(obj)
             return 0.0 if (flt_val == 0.0 or abs(flt_val) < 1e-12) else flt_val
         v = round(float(obj), 2)
         return 0.0 if (v == 0.0 or abs(v) < 1e-12) else v
 
-    if isinstance(obj, (np.integer, int)) and not isinstance(
-        obj, (bool, np.bool_)
-    ):
-        if not in_excluded_scope and key_name in CURRENCY_KEYS:
-            return f"${float(obj):,.2f}"
-        return int(obj)
+    if isinstance(obj, (np.integer, int)) and not isinstance(obj, (bool, np.bool_)):
+        int_val = int(obj)
+        if not in_calc_scope and key_name in CURRENCY_KEYS:
+            if abs(int_val) > SAFE_INTEGER_LIMIT:
+                return f"${int_val:,}"
+            return f"${float(int_val):,.2f}"
+        return int_val
 
     if isinstance(obj, (bool, np.bool_)):
         return bool(obj)
 
     if isinstance(obj, str):
-        if in_excluded_scope:
+        if in_calc_scope:
             return obj
         if key_name in CURRENCY_KEYS and not obj.startswith("$"):
             try:

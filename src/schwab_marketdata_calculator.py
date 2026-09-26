@@ -5,25 +5,7 @@ from typing import Any, Dict, Optional
 import numpy as np
 import pandas as pd
 
-
-def safe_float(v: Any) -> Optional[float]:
-    if v is None or pd.isna(v):
-        return None
-    try:
-        f = float(str(v).replace("$", "").replace(",", "").strip())
-        if math.isnan(f) or math.isinf(f):
-            return None
-        return 0.0 if (f == 0.0 or abs(f) < 1e-12) else f
-    except (ValueError, TypeError):
-        return None
-
-
-def safe_div(n: Any, d: Any) -> Optional[float]:
-    fn, fd = safe_float(n), safe_float(d)
-    if fn is None or fd is None or fd == 0.0:
-        return None
-    res = fn / fd
-    return None if math.isnan(res) or math.isinf(res) else res
+from src.schwab_utils import safe_div, safe_float
 
 
 class MasterThesisCalculator:
@@ -45,7 +27,7 @@ class MasterThesisCalculator:
             options_df if isinstance(options_df, pd.DataFrame) else pd.DataFrame()
         )
         self.params = params or {}
-        self.spot = safe_float(
+        self.quote_last = safe_float(
             self.raw.get("phase_0_grounding", {}).get("lastPrice")
         )
         self.close = safe_float(
@@ -70,7 +52,7 @@ class MasterThesisCalculator:
             self.spot_source = "options_payload_underlyingPrice"
             self.spot_vintage = "LOW"
         else:
-            self.calc_spot = self.spot
+            self.calc_spot = self.quote_last
             self.spot_source = "phase_0_grounding_last_price"
             self.spot_vintage = "MEDIUM"
 
@@ -90,8 +72,8 @@ class MasterThesisCalculator:
                 "session_gap_anchor": "PRIOR_SESSION_CLOSE_QUOTE",
             }
         gap = (
-            safe_div((self.spot - self.close) * 100.0, self.close)
-            if self.spot and self.close
+            safe_div((self.quote_last - self.close) * 100.0, self.close)
+            if self.quote_last is not None and self.close is not None
             else None
         )
         if self.is_open and self.quote_age is not None and self.quote_age > 3600.0:
@@ -430,24 +412,38 @@ class MasterThesisCalculator:
         oir = safe_div(p_oi, c_oi)
 
         tot_vol = (p_vol or 0.0) + (c_vol or 0.0)
-        if vr is None:
-            regime = "NO_OPTIONS_VOLUME"
-        elif vr < 0.50:
-            regime = "HEAVY_CALL_FLOW"
-        elif vr > 2.00:
-            regime = "HEAVY_PUT_FLOW"
-        else:
-            regime = "NEUTRAL"
+        flow_state = "CALCULATED" if (c_vol > 0 and c_oi > 0 and p_vol is not None and p_oi is not None) else "UNKNOWN"
 
-        flow_state = "CALCULATED" if c_vol > 0 and c_oi > 0 else "UNKNOWN"
+        if flow_state == "CALCULATED":
+            if vr is None:
+                regime = "NO_OPTIONS_VOLUME"
+            elif vr < 0.50:
+                regime = "HEAVY_CALL_FLOW"
+            elif vr > 2.00:
+                regime = "HEAVY_PUT_FLOW"
+            else:
+                regime = "NEUTRAL"
+        else:
+            regime = "UNCLASSIFIED"
+
         flow: Dict[str, Any] = {
             "put_call_volume_ratio": round(vr, 4) if vr is not None else None,
             "put_call_open_interest_ratio": round(oir, 4) if oir is not None else None,
             "volume_regime": regime,
             "state": flow_state,
         }
-        if flow_state == "UNKNOWN" and tot_vol == 0.0:
-            flow["reason"] = "options_chain_has_zero_contract_volume"
+
+        if flow_state == "UNKNOWN":
+            if tot_vol == 0.0:
+                flow["reason"] = "options_chain_has_zero_contract_volume"
+            elif c_oi == 0:
+                flow["reason"] = "zero_call_open_interest_on_traded_chain"
+            elif p_oi == 0:
+                flow["reason"] = "zero_put_open_interest_on_traded_chain"
+            elif c_vol == 0:
+                flow["reason"] = "zero_call_volume_on_active_chain"
+            else:
+                flow["reason"] = "insufficient_liquidity_across_options_surface"
 
         if p_vol == 0.0 and c_vol > 0.0:
             flow["flow_ratios_note"] = "ZERO_PUT_VOLUME_OBSERVED"
@@ -653,10 +649,15 @@ class MasterThesisCalculator:
         if not dtes:
             return {"state": "UNKNOWN", "reason": "no_valid_expirations"}
         f_dte = dtes[0]
-        sub = df[df["daysToExpiration"] == f_dte].assign(d_diff=(df["strikePrice"] - self.calc_spot).abs())
+        sub = df[df["daysToExpiration"] == f_dte].copy()
+        if sub.empty:
+            return {"state": "UNKNOWN", "reason": "insufficient_atm_quote_data"}
+        sub["d_diff"] = (sub["strikePrice"] - self.calc_spot).abs()
         atm_k = sub.loc[sub["d_diff"].idxmin(), "strikePrice"]
-        p_mark = safe_float(sub[(sub["strikePrice"] == atm_k) & (sub["putCallIndicator"] == "PUT")]["mark"].iloc[0]) if not sub[(sub["strikePrice"] == atm_k) & (sub["putCallIndicator"] == "PUT")].empty else None
-        c_mark = safe_float(sub[(sub["strikePrice"] == atm_k) & (sub["putCallIndicator"] == "CALL")]["mark"].iloc[0]) if not sub[(sub["strikePrice"] == atm_k) & (sub["putCallIndicator"] == "CALL")].empty else None
+        p_sub = sub[(sub["strikePrice"] == atm_k) & (sub["putCallIndicator"] == "PUT")]
+        c_sub = sub[(sub["strikePrice"] == atm_k) & (sub["putCallIndicator"] == "CALL")]
+        p_mark = safe_float(p_sub["mark"].iloc[0]) if not p_sub.empty else None
+        c_mark = safe_float(c_sub["mark"].iloc[0]) if not c_sub.empty else None
         if p_mark is not None and c_mark is not None and self.calc_spot:
             cost = p_mark + c_mark
             move_pct = safe_div(cost * 0.85 * 100.0, self.calc_spot)
@@ -677,9 +678,15 @@ class MasterThesisCalculator:
         if self.ph_df.empty:
             return {"classical_floor_pivots": pivots, "realized_volatility": rv}
 
+        if "datetime" not in self.ph_df.columns:
+            return {
+                "classical_floor_pivots": {"state": "UNKNOWN", "reason": "missing_datetime_column"},
+                "realized_volatility": {"state": "UNKNOWN", "reason": "missing_datetime_column"},
+            }
+
         clean_bars = self.ph_df.dropna(
-            subset=["open", "high", "low", "close"]
-        ).sort_values("datetime" if "datetime" in self.ph_df.columns else self.ph_df.columns[0])
+            subset=["open", "high", "low", "close", "datetime"]
+        ).sort_values("datetime")
 
         if clean_bars.empty:
             return {"classical_floor_pivots": pivots, "realized_volatility": rv}
@@ -688,12 +695,14 @@ class MasterThesisCalculator:
         l_series = clean_bars["low"]
         h_series = clean_bars["high"]
 
+        is_nav_flat = (h_series == l_series).mean() >= 0.80
+
         if (c_series <= 0.01).any() or (l_series <= 0.01).any():
             rv = {
                 "state": "UNKNOWN",
                 "reason": "sub_cent_zero_price_bars_unsuitable_for_diffusion_estimators",
             }
-        elif (h_series == l_series).mean() >= 0.80:
+        elif is_nav_flat:
             rv = {
                 "state": "NOT_APPLICABLE_NAV_BASED_ASSET",
                 "reason": "intraday_hl_identical_nav_bars",
@@ -701,25 +710,31 @@ class MasterThesisCalculator:
         else:
             rv = self._calc_realized_vol_suite(clean_bars)
 
-        last_bar = clean_bars.iloc[-1]
-        h, l, c = safe_float(last_bar["high"]), safe_float(last_bar["low"]), safe_float(last_bar["close"])
-        if h is not None and l is not None and c is not None and h > 0 and l > 0 and c > 0:
-            p = (h + l + c) / 3.0
-            if p >= 0.005:
-                pivots = {
-                    "Pivot": round(p, 2),
-                    "R1": round((2 * p) - l, 2),
-                    "R2": round(p + (h - l), 2),
-                    "R3": round(p + 2 * (h - l), 2),
-                    "S1": round((2 * p) - h, 2),
-                    "S2": round(p - (h - l), 2),
-                    "S3": round(p - 2 * (h - l), 2),
-                    "state": "CALCULATED",
-                }
+        if is_nav_flat:
+            pivots = {
+                "state": "NOT_APPLICABLE_NAV_BASED_ASSET",
+                "reason": "intraday_hl_identical_nav_bars",
+            }
+        else:
+            last_bar = clean_bars.iloc[-1]
+            h, l, c = safe_float(last_bar["high"]), safe_float(last_bar["low"]), safe_float(last_bar["close"])
+            if h is not None and l is not None and c is not None and h > 0 and l > 0 and c > 0:
+                p = (h + l + c) / 3.0
+                if p >= 0.005:
+                    pivots = {
+                        "Pivot": round(p, 2),
+                        "R1": round((2 * p) - l, 2),
+                        "R2": round(p + (h - l), 2),
+                        "R3": round(p + 2 * (h - l), 2),
+                        "S1": round((2 * p) - h, 2),
+                        "S2": round(p - (h - l), 2),
+                        "S3": round(p - 2 * (h - l), 2),
+                        "state": "CALCULATED",
+                    }
+                else:
+                    pivots = {"state": "UNKNOWN", "reason": "candle_prices_non_positive"}
             else:
                 pivots = {"state": "UNKNOWN", "reason": "candle_prices_non_positive"}
-        else:
-            pivots = {"state": "UNKNOWN", "reason": "candle_prices_non_positive"}
 
         return {"classical_floor_pivots": pivots, "realized_volatility": rv}
 
@@ -751,7 +766,7 @@ class MasterThesisCalculator:
             c2c_vol = float(log_ret.std(ddof=1) * np.sqrt(252) * 100.0) if len(log_ret) > 1 else None
 
         if n_bars < min_bars:
-            ret_dict = {
+            ret_dict: Dict[str, Any] = {
                 "state": "INSUFFICIENT_HISTORY",
                 "target_window_bars": target_win,
                 "actual_sample_bars": n_bars,
@@ -772,7 +787,7 @@ class MasterThesisCalculator:
         disp = abs((c2c_vol or gk) - gk)
         st = "PARTIAL_HISTORY" if (target_win == 252 and n_bars < 252) else "FULL_HISTORY"
 
-        ret = {
+        ret: Dict[str, Any] = {
             "status": st,
             "actual_sample_bars": n_bars,
             "return_observations": n_rets,
