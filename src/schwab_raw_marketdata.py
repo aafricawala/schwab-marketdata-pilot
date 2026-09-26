@@ -2,6 +2,7 @@
 from __future__ import annotations
 from datetime import datetime, timezone
 import math
+from pathlib import Path
 import re
 from typing import Any, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
@@ -237,7 +238,7 @@ def extract_strict_underlying_data(
   if is_shortable is None and is_htb is None and raw_htb_rate is None:
     short_dict: Dict[str, Any] = {
         'state': 'UNKNOWN',
-        'reason': 'missing_broker_reference_keys',
+        'reason': 'locate_data_not_reported_by_venue_or_tier',
     }
   else:
     htb_rate_val = raw_htb_rate
@@ -407,31 +408,45 @@ def extract_strict_underlying_data(
 def extract_in_memory_price_history(
     client: Any, symbol: str, config: Dict[str, Any]
 ) -> List[Dict[str, Any]]:
-  try:
-    r = client.get_price_history(
-        symbol,
-        period_type=config.get('HISTORICAL_PERIOD_TYPE', 'year'),
-        period=config.get('HISTORICAL_PERIOD', 1),
-        frequency_type=config.get('HISTORICAL_FREQUENCY_TYPE', 'daily'),
-        frequency=config.get('HISTORICAL_FREQUENCY', 1),
-        need_extended_hours_data=config.get(
-            'HISTORICAL_NEED_EXTENDED_HOURS', False
-        ),
-    )
-    d = _parse_client_response(r)
-    if d:
-      candles = d.get('candles', []) or []
-      valid_candles = [
-          c
-          for c in candles
-          if safe_float(c.get('close')) is not None
-          and safe_float(c.get('close')) > 0.01
-          and safe_float(c.get('open')) is not None
-          and safe_float(c.get('open')) > 0.01
-      ]
-      return valid_candles
-  except Exception:
-    pass
+  p_type = config.get('HISTORICAL_PERIOD_TYPE', 'year')
+  p_val = config.get('HISTORICAL_PERIOD', 1)
+  f_type = config.get('HISTORICAL_FREQUENCY_TYPE', 'daily')
+  f_val = config.get('HISTORICAL_FREQUENCY', 1)
+  ext_hrs = config.get('HISTORICAL_NEED_EXTENDED_HOURS', False)
+
+  for kwargs in [
+      {
+          'periodType': p_type,
+          'period': p_val,
+          'frequencyType': f_type,
+          'frequency': f_val,
+          'needExtendedHoursData': ext_hrs,
+      },
+      {
+          'period_type': p_type,
+          'period': p_val,
+          'frequency_type': f_type,
+          'frequency': f_val,
+          'need_extended_hours_data': ext_hrs,
+      },
+  ]:
+    try:
+      r = client.get_price_history(symbol, **kwargs)
+      d = _parse_client_response(r)
+      if d:
+        candles = d.get('candles', []) or []
+        valid_candles = [
+            c
+            for c in candles
+            if safe_float(c.get('close')) is not None
+            and safe_float(c.get('close')) > 0.01
+            and safe_float(c.get('open')) is not None
+            and safe_float(c.get('open')) > 0.01
+        ]
+        if valid_candles:
+          return valid_candles
+    except Exception:
+      continue
   return []
 
 
@@ -499,46 +514,59 @@ def extract_in_memory_option_chains(
   vol_30d = None
   for exp in target_expirations:
     exp_date = exp.get('expirationDate')
-    try:
-      r = client.get_option_chain(
-          symbol,
-          strike_count=strike_window,
-          from_date=exp_date,
-          to_date=exp_date,
-          strategy=strategy,
-      )
-      payload = _parse_client_response(r)
-      if not payload:
+    call_attempts = [
+        {
+            'strikeCount': strike_window,
+            'fromDate': exp_date,
+            'toDate': exp_date,
+            'strategy': strategy,
+        },
+        {
+            'strike_count': strike_window,
+            'from_date': exp_date,
+            'to_date': exp_date,
+            'strategy': strategy,
+        },
+    ]
+    payload = None
+    for kwargs in call_attempts:
+      try:
+        r = client.get_option_chain(symbol, **kwargs)
+        parsed = _parse_client_response(r)
+        if parsed:
+          payload = parsed
+          break
+      except Exception:
         continue
-      if underlying_price is None:
-        underlying_price = safe_float(payload.get('underlyingPrice'))
-      if vol_30d is None:
-        vol_30d = safe_float(payload.get('volatility'))
-      for book_key in ['callExpDateMap', 'putExpDateMap']:
-        book = payload.get(book_key, {})
-        for date_key, strikes in book.items():
-          for strike_key, contract_list in strikes.items():
-            for c in contract_list:
-              s_val = safe_float(c.get('strikePrice'))
-              dte_val = c.get('daysToExpiration')
-              mark_val = safe_float(c.get('mark'))
-              bid_val = safe_float(c.get('bid'))
-              ask_val = safe_float(c.get('ask'))
-              if s_val is None or s_val <= 0:
-                telemetry['rejected_zero_strike_count'] += 1
-                continue
-              if dte_val is None or int(dte_val) < 0:
-                telemetry['rejected_expired_contract_count'] += 1
-                continue
-              if mark_val is not None and mark_val < 0:
-                telemetry['rejected_negative_mark_count'] += 1
-                continue
-              if (bid_val is not None and bid_val < 0) or (
-                  ask_val is not None and ask_val < 0
-              ):
-                telemetry['rejected_negative_price_count'] += 1
-                continue
-              all_contracts.append(c)
-    except Exception:
+    if not payload:
       continue
+    if underlying_price is None:
+      underlying_price = safe_float(payload.get('underlyingPrice'))
+    if vol_30d is None:
+      vol_30d = safe_float(payload.get('volatility'))
+    for book_key in ['callExpDateMap', 'putExpDateMap']:
+      book = payload.get(book_key, {})
+      for date_key, strikes in book.items():
+        for strike_key, contract_list in strikes.items():
+          for c in contract_list:
+            s_val = safe_float(c.get('strikePrice'))
+            dte_val = c.get('daysToExpiration')
+            mark_val = safe_float(c.get('mark'))
+            bid_val = safe_float(c.get('bid'))
+            ask_val = safe_float(c.get('ask'))
+            if s_val is None or s_val <= 0:
+              telemetry['rejected_zero_strike_count'] += 1
+              continue
+            if dte_val is None or int(dte_val) < 0:
+              telemetry['rejected_expired_contract_count'] += 1
+              continue
+            if mark_val is not None and mark_val < 0:
+              telemetry['rejected_negative_mark_count'] += 1
+              continue
+            if (bid_val is not None and bid_val < 0) or (
+                ask_val is not None and ask_val < 0
+            ):
+              telemetry['rejected_negative_price_count'] += 1
+              continue
+            all_contracts.append(c)
   return vol_30d, underlying_price, all_contracts, telemetry
