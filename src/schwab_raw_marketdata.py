@@ -1,4 +1,4 @@
-# src/schwab_raw_marketdata.py
+# schwab_raw_marketdata.py
 from __future__ import annotations
 import functools
 import logging
@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 import pandas as pd
 
-from src.schwab_utils import safe_div, safe_float, validate_symbol
+from schwab_utils import safe_div, safe_float, validate_symbol
 
 logger = logging.getLogger("schwab_raw_marketdata")
 logger.addHandler(logging.NullHandler())
@@ -109,6 +109,79 @@ def extract_market_open_status(client: Any) -> bool:
     return (9, 30) <= (now_et.hour, now_et.minute) < (16, 0)
 
 
+def _build_halted_grounding(
+    clean_sym: str, tz_et: ZoneInfo, q_age: Optional[float], q_time_iso: Optional[str]
+) -> Dict[str, Any]:
+    """Synthetic halted/unquoted grounding payload for empty or malformed quote envelopes."""
+    return {
+        "phase_0_grounding": {
+            "symbol": clean_sym,
+            "company_name": "",
+            "lastPrice": None,
+            "closePrice": None,
+            "quoteTime_ISO_ET": q_time_iso,
+            "quote_age_seconds": q_age,
+            "quote_age_classification": "UNAVAILABLE_ASSET_HALTED_OR_UNQUOTED",
+        },
+        "step_1_fundamentals": {
+            "beta": None,
+            "beta_state": "VENDOR_UNAVAILABLE",
+            "peRatio": None,
+            "peRatio_state": "VENDOR_UNAVAILABLE_ASSET_HALTED",
+            "pegRatio": None,
+            "pegRatio_state": "VENDOR_UNAVAILABLE",
+            "pcfRatio": None,
+            "pcfRatio_state": "VENDOR_UNAVAILABLE",
+            "pbRatio": None,
+            "totalDebtToEquity": None,
+            "totalDebtToEquity_basis": "VENDOR_RAW_UNVERIFIED",
+            "grossMarginTTM": None,
+            "netProfitMarginTTM": None,
+            "operatingMarginTTM": None,
+            "margin_fields_suspect": None,
+            "margin_fields_suspect_reason": None,
+            "margin_fields_suspect_state": "VENDOR_UNAVAILABLE_INPUTS_ABSENT",
+            "returnOnEquity": None,
+            "returnOnEquity_state": "VENDOR_UNAVAILABLE",
+            "returnOnAssets": None,
+            "returnOnAssets_state": "VENDOR_UNAVAILABLE",
+            "eps": None,
+            "eps_state": "VENDOR_UNAVAILABLE_ASSET_HALTED",
+            "revChangeYear": None,
+            "revChangeYear_state": "VENDOR_UNAVAILABLE",
+            "divYield": 0.0,
+            "divYield_basis": "VENDOR_UNAVAILABLE",
+            "divYield_raw": 0.0,
+            "divAmount": "$0.00",
+            "div_amount_basis": "ANNUAL",
+            "divFreq": 0.0,
+            "sharesOutstanding": None,
+            "shares_outstanding_state": "UNAVAILABLE_ASSET_HALTED_OR_UNQUOTED",
+            "marketCap": None,
+            "marketCap_unit": "VENDOR_RAW_UNVERIFIED",
+        },
+        "short_locate_status": {
+            "state": "UNKNOWN",
+            "reason": "asset_halted_or_unquoted_locate_unavailable",
+        },
+        "step_8_and_9_liquidity_and_sizing": {
+            "state": "UNVERIFIED_EMPTY_ORDER_BOOK",
+            "bidPrice": None,
+            "askPrice": None,
+            "bidSize": 0.0,
+            "askSize": 0.0,
+            "totalVolume": 0.0,
+            "vol10DayAvg": None,
+            "vol10DayAvg_state": "VENDOR_UNAVAILABLE",
+            "vol3MonthAvg_state": "VENDOR_FIELD_NOT_PROVIDED",
+            "vol1YearAvg": None,
+            "vol1YearAvg_state": "VENDOR_UNAVAILABLE",
+            "reason": "asset_halted_or_unquoted",
+            "book_liquidity_note": "EMPTY_ORDER_BOOK_ASSET_HALTED",
+        },
+    }
+
+
 def extract_strict_underlying_data(
     client: Any, symbol: str, tz_et: ZoneInfo
 ) -> Dict[str, Any]:
@@ -118,9 +191,14 @@ def extract_strict_underlying_data(
     def _fetch_quote(sym: str) -> Any:
         return client.get_quote(sym)
 
-    res_dict = _parse_client_response(_fetch_quote(clean_sym))
-    if res_dict is None:
-        raise ValueError(f"Failed to fetch valid quote response for {clean_sym}")
+    try:
+        res_dict = _parse_client_response(_fetch_quote(clean_sym))
+    except Exception as e:
+        logger.warning("Quote fetch raised for %s: %s", clean_sym, e)
+        res_dict = None
+
+    if not isinstance(res_dict, dict) or not res_dict:
+        return _build_halted_grounding(clean_sym, tz_et, None, None)
 
     candidate = (
         res_dict.get(clean_sym)
@@ -135,12 +213,18 @@ def extract_strict_underlying_data(
             candidate = candidate[symbol]
     data = candidate if isinstance(candidate, dict) else {}
 
-    ref = data.get("reference", {})
-    quote = data.get("quote", {})
-    fund = data.get("fundamental", {})
+    if not data:
+        return _build_halted_grounding(clean_sym, tz_et, None, None)
+
+    ref = data.get("reference", {}) if isinstance(data.get("reference"), dict) else {}
+    quote = data.get("quote", {}) if isinstance(data.get("quote"), dict) else {}
+    fund = data.get("fundamental", {}) if isinstance(data.get("fundamental"), dict) else {}
     asset_sub = str(ref.get("assetSubType", "") or "").upper()
     asset_main = str(ref.get("assetMainType", "") or "").upper()
     desc = str(ref.get("description", "") or "").upper()
+
+    if not quote and not fund:
+        return _build_halted_grounding(clean_sym, tz_et, None, None)
 
     is_warrant = (
         asset_sub in ["WARRANT", "WARNT"]
@@ -188,7 +272,6 @@ def extract_strict_underlying_data(
         q_time_iso = None
         q_age = None
 
-    # NEW-OBS-P: Zero-price ($0.00) functional halt detection
     is_halted_or_unquoted = (
         (last_p is None and close_p is None)
         or (last_p == 0.0 and close_p == 0.0)
@@ -260,7 +343,6 @@ def extract_strict_underlying_data(
     else:
         shares_state = "VENDOR_UNAVAILABLE"
 
-    # NEW-OBS-Q: Vendor sentinel magnitude bounds enforcement
     if is_halted_or_unquoted:
         pe_val, pe_state = None, "VENDOR_UNAVAILABLE_ASSET_HALTED"
         eps_val, eps_state = None, "VENDOR_UNAVAILABLE_ASSET_HALTED"
@@ -335,6 +417,8 @@ def extract_strict_underlying_data(
         )
 
     short_stat = ref.get("shortLocate", quote.get("shortLocate", {}))
+    if not isinstance(short_stat, dict):
+        short_stat = {}
     is_shortable = (
         ref.get("isShortable")
         if ref.get("isShortable") is not None
@@ -349,7 +433,6 @@ def extract_strict_underlying_data(
         ref.get("htbRate", quote.get("htbRate", short_stat.get("rate")))
     )
 
-    # NEW-OBS-Y: Short-circuit short locate status for halted assets
     if is_halted_or_unquoted:
         short_dict: Dict[str, Any] = {
             "state": "UNKNOWN",

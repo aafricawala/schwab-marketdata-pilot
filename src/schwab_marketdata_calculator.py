@@ -1,11 +1,11 @@
-# src/schwab_marketdata_calculator.py
+# schwab_marketdata_calculator.py
 from __future__ import annotations
 import math
 from typing import Any, Dict, Optional
 import numpy as np
 import pandas as pd
 
-from src.schwab_utils import safe_div, safe_float
+from schwab_utils import safe_div, safe_float
 
 
 class MasterThesisCalculator:
@@ -48,7 +48,6 @@ class MasterThesisCalculator:
             self.deriv.get("surface_parameters", {}).get("underlyingPrice")
         )
 
-        # NEW-OBS-O: Escalate vintage risk to HIGH if grounding spot is STALE (>5 hours / 18,000s)
         is_stale_quote = (
             (self.quote_age is not None and self.quote_age > 18000.0)
             or (self.q_class == "STALE")
@@ -247,7 +246,6 @@ class MasterThesisCalculator:
             else None
         )
 
-        # NEW-OBS-M: Vintage disparity resolution for BRK/B and large-cap forward consensus
         if is_halted:
             calc["pe_eps_vintage_disparity"] = None
             calc["pe_eps_disparity_state"] = "NOT_APPLICABLE_ASSET_HALTED"
@@ -264,7 +262,6 @@ class MasterThesisCalculator:
             calc["pe_basis_note"] = "reported_pe_reflects_negative_forward_consensus_vs_positive_trailing_eps"
         elif not is_etn and pe and pe > 0 and imp_pe and imp_pe > 0:
             abs_delta = abs(pe - imp_pe)
-            # Rule out sub-cent precision noise stubs (e.g. BRK/B: 0.01 vs 0.0108)
             if abs_delta < 0.05 or pe <= 0.05 or imp_pe <= 0.05:
                 calc["pe_eps_vintage_disparity"] = False
                 calc["pe_eps_disparity_state"] = "WITHIN_TOLERANCE"
@@ -272,7 +269,6 @@ class MasterThesisCalculator:
                 calc["pe_eps_disparity_pct"] = 0.0
             else:
                 disp_pct = round(abs_delta / imp_pe * 100.0, 2)
-                # Broaden tolerance band: >50% for consensus vintage shift; >100% severe
                 has_disp = disp_pct > 50.0 and abs_delta > 2.0
                 disp_state = (
                     "SEVERE_VINTAGE_DISPARITY"
@@ -437,7 +433,6 @@ class MasterThesisCalculator:
         oir = safe_div(p_oi, c_oi)
         tot_vol = (p_vol or 0.0) + (c_vol or 0.0)
 
-        # NEW-OBS-N: If both ratios null -> UNCONDITIONALLY state: UNKNOWN
         if vr is not None and oir is not None:
             flow_state = "CALCULATED"
             if vr < 0.50:
@@ -468,7 +463,6 @@ class MasterThesisCalculator:
             "state": flow_state,
         }
 
-        # NEW-OBS-X: Deterministic hierarchy for reasons & non-colliding notes
         if flow_state in ("UNKNOWN", "PARTIAL"):
             if tot_vol == 0.0:
                 flow["reason"] = "options_chain_has_zero_contract_volume"
@@ -481,7 +475,6 @@ class MasterThesisCalculator:
             else:
                 flow["reason"] = "insufficient_liquidity_across_options_surface"
 
-            # Emit observational notes only if they do not duplicate the primary reason
             if p_vol == 0.0 and c_vol > 0.0 and flow["reason"] != "options_chain_has_zero_contract_volume":
                 flow["flow_ratios_note"] = "ZERO_PUT_VOLUME_OBSERVED"
             if p_oi == 0.0 and c_oi > 0.0 and flow["reason"] != "zero_put_open_interest_on_traded_chain":
@@ -823,7 +816,6 @@ class MasterThesisCalculator:
         gk = float(np.sqrt((0.5 * (hl**2) - ((2.0 * np.log(2.0) - 1.0) * (co**2))).mean()) * np.sqrt(252) * 100.0)
         disp = abs((c2c_vol or gk) - gk)
 
-        # NEW-OBS-U: Extreme dispersion and excessive volatility regime suppression
         if disp > 100.0 or gk > 200.0 or (c2c_vol is not None and c2c_vol > 200.0):
             suppressed_dict: Dict[str, Any] = {
                 "state": "UNKNOWN",
