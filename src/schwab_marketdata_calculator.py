@@ -193,54 +193,36 @@ class MasterThesisCalculator:
 
         if is_halted:
             calc["earnings_yield_state"] = "N/A"
-            calc["earnings_yield_reason"] = (
-                "asset_halted_or_unquoted_quote_unavailable"
-            )
+            calc["earnings_yield_reason"] = "asset_halted_or_unquoted_quote_unavailable"
         elif is_etn:
             calc["earnings_yield_state"] = "N/A"
-            calc["earnings_yield_reason"] = (
-                "earnings_negative_or_unstable_pe_ratio_non_positive"
-            )
+            calc["earnings_yield_reason"] = "earnings_negative_or_unstable_pe_ratio_non_positive"
         elif spot_near_zero:
             calc["earnings_yield_state"] = "N/A"
-            calc["earnings_yield_reason"] = (
-                "spot_price_near_zero_or_negative_earnings"
-            )
+            calc["earnings_yield_reason"] = "spot_price_near_zero_or_negative_earnings"
         elif pe and pe > 0:
             if eps_non_pos:
                 calc["earnings_yield_state"] = "N/A"
                 if eps is not None and eps < 0.0:
-                    calc["earnings_yield_reason"] = (
-                        "pe_ratio_positive_while_trailing_eps_negative_unreconciled"
-                    )
+                    calc["earnings_yield_reason"] = "pe_ratio_positive_while_trailing_eps_negative_unreconciled"
                 elif eps is not None and 0.0 < eps < 0.01:
-                    calc["earnings_yield_reason"] = (
-                        "pe_ratio_unsupported_by_sub_cent_reported_eps"
-                    )
+                    calc["earnings_yield_reason"] = "pe_ratio_unsupported_by_sub_cent_reported_eps"
                 else:
-                    calc["earnings_yield_reason"] = (
-                        "pe_ratio_unsupported_by_non_positive_reported_eps"
-                    )
+                    calc["earnings_yield_reason"] = "pe_ratio_unsupported_by_non_positive_reported_eps"
             elif near_zero_pe_stub or class_mismatch_eps:
                 calc["earnings_yield_state"] = "N/A"
-                calc["earnings_yield_reason"] = (
-                    "pe_ratio_structurally_inconsistent_with_trailing_eps"
-                )
+                calc["earnings_yield_reason"] = "pe_ratio_structurally_inconsistent_with_trailing_eps"
             elif self.calc_spot and (
                 (pe * eps / self.calc_spot > 100.0)
                 or (self.calc_spot / (pe * eps) > 100.0)
             ):
                 calc["earnings_yield_state"] = "N/A"
-                calc["earnings_yield_reason"] = (
-                    "pe_ratio_structurally_inconsistent_with_trailing_eps"
-                )
+                calc["earnings_yield_reason"] = "pe_ratio_structurally_inconsistent_with_trailing_eps"
             else:
                 calc["earnings_yield_pct"] = round(safe_div(100.0, pe) or 0.0, 4)
                 calc["earnings_yield_state"] = "CALCULATED"
         elif eps and eps >= 0.01 and self.calc_spot:
-            calc["earnings_yield_pct"] = round(
-                safe_div(eps * 100.0, self.calc_spot) or 0.0, 4
-            )
+            calc["earnings_yield_pct"] = round(safe_div(eps * 100.0, self.calc_spot) or 0.0, 4)
             calc["earnings_yield_state"] = "CALCULATED"
         else:
             calc["earnings_yield_state"] = "N/A"
@@ -274,17 +256,11 @@ class MasterThesisCalculator:
             calc["pe_eps_vintage_disparity"] = True
             calc["pe_eps_disparity_state"] = "NEGATIVE_REPORTED_PE_POSITIVE_EPS"
             calc["implied_trailing_pe"] = round(imp_pe, 2)
-            calc["pe_basis_note"] = (
-                "reported_pe_reflects_negative_forward_consensus_vs_positive_trailing_eps"
-            )
+            calc["pe_basis_note"] = "reported_pe_reflects_negative_forward_consensus_vs_positive_trailing_eps"
         elif not is_etn and pe and pe > 0 and imp_pe and imp_pe > 0:
             disp_pct = round(abs(pe - imp_pe) / imp_pe * 100.0, 2)
             has_disp = disp_pct > 10.0
-            disp_state = (
-                "SEVERE_VINTAGE_DISPARITY"
-                if disp_pct > 100.0
-                else ("VINTAGE_DISPARITY" if has_disp else "WITHIN_TOLERANCE")
-            )
+            disp_state = "SEVERE_VINTAGE_DISPARITY" if disp_pct > 100.0 else ("VINTAGE_DISPARITY" if has_disp else "WITHIN_TOLERANCE")
             calc["pe_eps_vintage_disparity"] = has_disp
             calc["pe_eps_disparity_state"] = disp_state
             calc["implied_trailing_pe"] = round(imp_pe, 2)
@@ -292,9 +268,7 @@ class MasterThesisCalculator:
             if disp_pct > 100.0:
                 calc["pe_basis_note"] = "SEVERE_DISPARITY_CAUSE_UNVERIFIED"
             elif has_disp:
-                calc["pe_basis_note"] = (
-                    "reported_pe_reflects_forward_consensus_vs_trailing_eps"
-                )
+                calc["pe_basis_note"] = "reported_pe_reflects_forward_consensus_vs_trailing_eps"
         else:
             calc["pe_eps_vintage_disparity"] = None
             calc["pe_eps_disparity_state"] = "NOT_APPLICABLE"
@@ -302,9 +276,7 @@ class MasterThesisCalculator:
         is_non_payer = div_y == 0.0 or div_amt == 0.0 or div_y is None
         if is_halted:
             calc["dividend_payout_ratio_state"] = "NOT_APPLICABLE_ASSET_HALTED"
-            calc["dividend_payout_ratio_reason"] = (
-                "asset_halted_or_unquoted_quote_unavailable"
-            )
+            calc["dividend_payout_ratio_reason"] = "asset_halted_or_unquoted_quote_unavailable"
             calc["dividend_payout_ratio_health"] = "NOT_APPLICABLE"
         elif is_non_payer:
             calc["dividend_payout_ratio_state"] = "NOT_APPLICABLE_NON_PAYER"
@@ -320,9 +292,7 @@ class MasterThesisCalculator:
             calc["dividend_payout_ratio_health"] = "CAPITAL_STRUCTURE_UNVERIFIED"
         elif eps is not None and eps >= 0.01:
             payout = safe_div(div_amt * 100.0, eps)
-            calc["imputed_dividend_payout_ratio_pct"] = (
-                round(payout, 2) if payout is not None else None
-            )
+            calc["imputed_dividend_payout_ratio_pct"] = round(payout, 2) if payout is not None else None
             calc["dividend_payout_ratio_state"] = "CALCULATED"
             if payout is not None and payout > 100.0:
                 calc["dividend_payout_ratio_health"] = "UNSUSTAINABLE_COVERAGE_DEFICIT"
@@ -352,9 +322,7 @@ class MasterThesisCalculator:
             calc["full_capital_coverage_unknown"] = True
             calc["distribution_coverage_unknown"] = True
             calc["share_count_coverage_unknown"] = True
-            calc["coverage_unknown_reason"] = (
-                "asset_halted_or_unquoted_quote_unavailable"
-            )
+            calc["coverage_unknown_reason"] = "asset_halted_or_unquoted_quote_unavailable"
         elif is_etn:
             calc["state"] = "PARTIAL"
             calc["coverage_unknown"] = True
@@ -365,9 +333,7 @@ class MasterThesisCalculator:
             if div_y and div_y > 10.0 and self.calc_spot:
                 c_y = safe_div(div_amt * 100.0, self.calc_spot)
                 if c_y:
-                    calc["div_yield_vendor_vs_computed_delta_pct"] = round(
-                        abs(div_y - c_y), 2
-                    )
+                    calc["div_yield_vendor_vs_computed_delta_pct"] = round(abs(div_y - c_y), 2)
                     calc["divYield_basis_verified"] = "ANNUAL_VENDOR_CONFIRMED"
         else:
             has_calc = any(
@@ -387,23 +353,17 @@ class MasterThesisCalculator:
                 calc["full_capital_coverage_unknown"] = eps is None or shares is None
                 calc["coverage_unknown"] = calc["full_capital_coverage_unknown"]
                 if eps is None and shares is None:
-                    calc["coverage_unknown_reason"] = (
-                        "dividend_payer_missing_eps_and_shares"
-                    )
+                    calc["coverage_unknown_reason"] = "dividend_payer_missing_eps_and_shares"
                 elif eps is None:
                     calc["coverage_unknown_reason"] = "dividend_payer_missing_eps"
                 elif shares is None:
                     calc["coverage_unknown_reason"] = "dividend_payer_missing_shares"
             if eps_state == "VENDOR_UNAVAILABLE_FOREIGN_ADR_SUPPRESSED":
-                calc["distribution_coverage_unknown_reason"] = (
-                    "adr_eps_suppressed_no_coverage_assessment"
-                )
+                calc["distribution_coverage_unknown_reason"] = "adr_eps_suppressed_no_coverage_assessment"
             if pe and pe > 0 and (
                 eps is None or eps_state == "VENDOR_UNAVAILABLE_FOREIGN_ADR_SUPPRESSED"
             ):
-                calc["earnings_yield_basis_note"] = (
-                    "derived_solely_from_vendor_pe_ratio_eps_unavailable"
-                )
+                calc["earnings_yield_basis_note"] = "derived_solely_from_vendor_pe_ratio_eps_unavailable"
         return calc
 
     def _calc_step_3_7(self) -> Dict[str, Any]:
@@ -602,51 +562,17 @@ class MasterThesisCalculator:
             return ret
         p_row = puts.loc[puts["d_diff"].idxmin()]
         c_row = calls.loc[calls["d_diff"].idxmin()]
-        p_bid, p_ask, p_iv = (
-            safe_float(p_row.get("bid")),
-            safe_float(p_row.get("ask")),
-            safe_float(p_row.get("volatility")),
-        )
-        c_bid, c_ask, c_iv = (
-            safe_float(c_row.get("bid")),
-            safe_float(c_row.get("ask")),
-            safe_float(c_row.get("volatility")),
-        )
-        p_mid = safe_float(p_row.get("mark")) or (
-            safe_div(p_bid + p_ask, 2)
-            if p_bid is not None and p_ask is not None
-            else None
-        )
-        c_mid = safe_float(c_row.get("mark")) or (
-            safe_div(c_bid + c_ask, 2)
-            if c_bid is not None and c_ask is not None
-            else None
-        )
-        p_spr = (
-            2.0
-            if (p_bid == 0.0 and p_ask and p_ask > 0)
-            else (
-                safe_div(abs(p_ask - p_bid), p_mid)
-                if p_ask is not None and p_bid is not None and p_mid
-                else None
-            )
-        )
-        c_spr = (
-            2.0
-            if (c_bid == 0.0 and c_ask and c_ask > 0)
-            else (
-                safe_div(abs(c_ask - c_bid), c_mid)
-                if c_ask is not None and c_bid is not None and c_mid
-                else None
-            )
-        )
+        p_bid, p_ask, p_iv = safe_float(p_row.get("bid")), safe_float(p_row.get("ask")), safe_float(p_row.get("volatility"))
+        c_bid, c_ask, c_iv = safe_float(c_row.get("bid")), safe_float(c_row.get("ask")), safe_float(c_row.get("volatility"))
+        p_mid = safe_float(p_row.get("mark")) or (safe_div(p_bid + p_ask, 2) if p_bid is not None and p_ask is not None else None)
+        c_mid = safe_float(c_row.get("mark")) or (safe_div(c_bid + c_ask, 2) if c_bid is not None and c_ask is not None else None)
+        p_spr = 2.0 if (p_bid == 0.0 and p_ask and p_ask > 0) else (safe_div(abs(p_ask - p_bid), p_mid) if p_ask is not None and p_bid is not None and p_mid else None)
+        c_spr = 2.0 if (c_bid == 0.0 and c_ask and c_ask > 0) else (safe_div(abs(c_ask - c_bid), c_mid) if c_ask is not None and c_bid is not None and c_mid else None)
         max_spr = self.params.get("MAX_SKEW_RELATIVE_SPREAD", 0.50)
         p_fail = p_spr is not None and p_spr > max_spr
         c_fail = c_spr is not None and c_spr > max_spr
         if p_fail or c_fail or p_spr is None or c_spr is None:
-            rej_wing = (
-                "BOTH" if (p_fail and c_fail) else ("PUT" if p_fail else "CALL")
-            )
+            rej_wing = "BOTH" if (p_fail and c_fail) else ("PUT" if p_fail else "CALL")
             rej_dict = {
                 "skew_tenor_dte": t_dte,
                 "skew_delta_anchor": "REJECTED_AT_WING_SPREAD_GATE",
@@ -654,12 +580,8 @@ class MasterThesisCalculator:
                 "spread_tolerance_source": "DEFAULT_EXECUTION_BOUNDARY",
                 "state": "UNKNOWN",
                 "reason": "skew_wings_exceed_spread_tolerance",
-                "observed_put_relative_spread": (
-                    round(p_spr, 4) if p_spr is not None else None
-                ),
-                "observed_call_relative_spread": (
-                    round(c_spr, 4) if c_spr is not None else None
-                ),
+                "observed_put_relative_spread": round(p_spr, 4) if p_spr is not None else None,
+                "observed_call_relative_spread": round(c_spr, 4) if c_spr is not None else None,
                 "spread_zero_bid_flag": p_bid == 0.0 or c_bid == 0.0,
                 "rejected_wing": rej_wing,
                 "cmi_bracket_ref": "constant_maturity_30d_iv",
@@ -671,20 +593,13 @@ class MasterThesisCalculator:
             return rej_dict
         diff = p_iv - c_iv if p_iv and c_iv else None
         p_d, c_d = safe_float(p_row.get("delta")), safe_float(c_row.get("delta"))
-        p_abs = abs(p_d) if p_d else 0.0
-        c_abs = abs(c_d) if c_d else 0.0
+        p_abs, c_abs = abs(p_d) if p_d else 0.0, abs(c_d) if c_d else 0.0
         sym_gap = round(abs(p_abs - c_abs), 3)
         p_in_band = 0.20 <= p_abs <= 0.30
         c_in_band = 0.20 <= c_abs <= 0.30
         is_primary = p_in_band and c_in_band and (sym_gap <= 0.05)
-        anchor_label = (
-            "PRIMARY_25D_SYMMETRIC" if is_primary else "FALLBACK_NEAREST_SYMMETRIC"
-        )
-        s_regime = (
-            "REVERSE_CALL_SKEW"
-            if (diff is not None and diff > 0)
-            else "STANDARD_PUT_SKEW"
-        )
+        anchor_label = "PRIMARY_25D_SYMMETRIC" if is_primary else "FALLBACK_NEAREST_SYMMETRIC"
+        s_regime = "REVERSE_CALL_SKEW" if (diff is not None and diff > 0) else "STANDARD_PUT_SKEW"
         ret = {
             "skew_tenor_dte": t_dte,
             "skew_delta_anchor": anchor_label,
@@ -701,50 +616,20 @@ class MasterThesisCalculator:
         if b_qual:
             ret["bracket_quality"] = b_qual
         if not is_primary:
-            ret["skew_anchor_reason"] = (
-                "PRIMARY_BAND_VIOLATED"
-                if not (p_in_band and c_in_band)
-                else "SYMMETRY_GAP_EXCEEDED"
-            )
+            ret["skew_anchor_reason"] = "PRIMARY_BAND_VIOLATED" if not (p_in_band and c_in_band) else "SYMMETRY_GAP_EXCEEDED"
         return ret
 
     def _calc_atm_straddle(self, df: pd.DataFrame) -> Dict[str, Any]:
         if df.empty or "daysToExpiration" not in df.columns or "strikePrice" not in df.columns:
             return {"state": "UNKNOWN", "reason": "no_valid_expirations"}
-        dtes = sorted(
-            list({int(d) for d in df["daysToExpiration"].dropna() if int(d) >= 0})
-        )
+        dtes = sorted(list({int(d) for d in df["daysToExpiration"].dropna() if int(d) >= 0}))
         if not dtes:
             return {"state": "UNKNOWN", "reason": "no_valid_expirations"}
         f_dte = dtes[0]
-        sub = df[df["daysToExpiration"] == f_dte].assign(
-            d_diff=(df["strikePrice"] - self.calc_spot).abs()
-        )
+        sub = df[df["daysToExpiration"] == f_dte].assign(d_diff=(df["strikePrice"] - self.calc_spot).abs())
         atm_k = sub.loc[sub["d_diff"].idxmin(), "strikePrice"]
-        p_mark = (
-            safe_float(
-                sub[
-                    (sub["strikePrice"] == atm_k)
-                    & (sub["putCallIndicator"] == "PUT")
-                ]["mark"].iloc[0]
-            )
-            if not sub[
-                (sub["strikePrice"] == atm_k) & (sub["putCallIndicator"] == "PUT")
-            ].empty
-            else None
-        )
-        c_mark = (
-            safe_float(
-                sub[
-                    (sub["strikePrice"] == atm_k)
-                    & (sub["putCallIndicator"] == "CALL")
-                ]["mark"].iloc[0]
-            )
-            if not sub[
-                (sub["strikePrice"] == atm_k) & (sub["putCallIndicator"] == "CALL")
-            ].empty
-            else None
-        )
+        p_mark = safe_float(sub[(sub["strikePrice"] == atm_k) & (sub["putCallIndicator"] == "PUT")]["mark"].iloc[0]) if not sub[(sub["strikePrice"] == atm_k) & (sub["putCallIndicator"] == "PUT")].empty else None
+        c_mark = safe_float(sub[(sub["strikePrice"] == atm_k) & (sub["putCallIndicator"] == "CALL")]["mark"].iloc[0]) if not sub[(sub["strikePrice"] == atm_k) & (sub["putCallIndicator"] == "CALL")].empty else None
         if p_mark is not None and c_mark is not None and self.calc_spot:
             cost = p_mark + c_mark
             move_pct = safe_div(cost * 0.85 * 100.0, self.calc_spot)
@@ -772,31 +657,28 @@ class MasterThesisCalculator:
         if clean_bars.empty:
             return {"classical_floor_pivots": pivots, "realized_volatility": rv}
 
-        # DEF-ADV-178: Immediate sub-cent guard against diffusion estimators
         c_series = clean_bars["close"]
         l_series = clean_bars["low"]
+        h_series = clean_bars["high"]
+
+        # Sub-Cent zero price bars gate
         if (c_series <= 0.01).any() or (l_series <= 0.01).any():
             rv = {
                 "state": "UNKNOWN",
                 "reason": "sub_cent_zero_price_bars_unsuitable_for_diffusion_estimators",
             }
+        # Flat NAV / Mutual Fund Gate (e.g. SNXFX where High == Low)
+        elif (h_series == l_series).mean() >= 0.80:
+            rv = {
+                "state": "NOT_APPLICABLE_NAV_BASED_ASSET",
+                "reason": "intraday_hl_identical_nav_bars",
+            }
         else:
             rv = self._calc_realized_vol_suite(clean_bars)
 
         last_bar = clean_bars.iloc[-1]
-        h, l, c = (
-            safe_float(last_bar["high"]),
-            safe_float(last_bar["low"]),
-            safe_float(last_bar["close"]),
-        )
-        if (
-            h is not None
-            and l is not None
-            and c is not None
-            and h > 0
-            and l > 0
-            and c > 0
-        ):
+        h, l, c = safe_float(last_bar["high"]), safe_float(last_bar["low"]), safe_float(last_bar["close"])
+        if h is not None and l is not None and c is not None and h > 0 and l > 0 and c > 0:
             p = (h + l + c) / 3.0
             if p >= 0.005:
                 pivots = {
@@ -822,12 +704,8 @@ class MasterThesisCalculator:
             return {"state": "UNKNOWN", "reason": "insufficient_bars_for_returns"}
         res: Dict[str, Any] = {"state": "CALCULATED"}
         res["10d_tactical"] = self._calc_rv_horizon(df.tail(11), 10, min_bars=8)
-        res["30d_intermediate"] = self._calc_rv_horizon(
-            df.tail(31), 30, min_bars=20
-        )
-        res["252d_macro"] = self._calc_rv_horizon(
-            df.tail(253), 252, min_bars=180, check_seasoning=True, total_avail=n
-        )
+        res["30d_intermediate"] = self._calc_rv_horizon(df.tail(31), 30, min_bars=20)
+        res["252d_macro"] = self._calc_rv_horizon(df.tail(253), 252, min_bars=180, check_seasoning=True, total_avail=n)
         return res
 
     def _calc_rv_horizon(
@@ -841,18 +719,12 @@ class MasterThesisCalculator:
         n_bars = len(df)
         n_rets = max(0, n_bars - 1)
         c2c_vol = None
-        c_col = "close"
-        h_col = "high"
-        l_col = "low"
-        o_col = "open"
+        c_col, h_col, l_col, o_col = "close", "high", "low", "open"
 
         if n_rets >= 2 and c_col in df.columns:
             log_ret = np.log(df[c_col] / df[c_col].shift(1)).dropna()
-            c2c_vol = (
-                float(log_ret.std(ddof=1) * np.sqrt(252) * 100.0)
-                if len(log_ret) > 1
-                else None
-            )
+            c2c_vol = float(log_ret.std(ddof=1) * np.sqrt(252) * 100.0) if len(log_ret) > 1 else None
+
         if n_bars < min_bars:
             ret_dict = {
                 "state": "INSUFFICIENT_HISTORY",
@@ -864,32 +736,17 @@ class MasterThesisCalculator:
             if c2c_vol is not None:
                 ret_dict["computed_realized_vol"] = round(c2c_vol, 2)
             if check_seasoning:
-                ret_dict["listing_seasoning"] = (
-                    "ESTABLISHED_LISTING"
-                    if total_avail >= 250
-                    else "UNSEASONED_LISTING"
-                )
+                ret_dict["listing_seasoning"] = "ESTABLISHED_LISTING" if total_avail >= 250 else "UNSEASONED_LISTING"
                 ret_dict["total_available_bars"] = total_avail
             return ret_dict
+
         hl = np.log(df[h_col] / df[l_col])
         co = np.log(df[c_col] / df[o_col])
-        park = float(
-            np.sqrt((1.0 / (4.0 * np.log(2.0))) * (hl**2).mean())
-            * np.sqrt(252)
-            * 100.0
-        )
-        gk = float(
-            np.sqrt(
-                (0.5 * (hl**2) - ((2.0 * np.log(2.0) - 1.0) * (co**2))).mean()
-            )
-            * np.sqrt(252)
-            * 100.0
-        )
+        park = float(np.sqrt((1.0 / (4.0 * np.log(2.0))) * (hl**2).mean()) * np.sqrt(252) * 100.0)
+        gk = float(np.sqrt((0.5 * (hl**2) - ((2.0 * np.log(2.0) - 1.0) * (co**2))).mean()) * np.sqrt(252) * 100.0)
         disp = abs((c2c_vol or gk) - gk)
-        if target_win == 252 and n_bars < 252:
-            st = "PARTIAL_HISTORY"
-        else:
-            st = "FULL_HISTORY"
+        st = "PARTIAL_HISTORY" if (target_win == 252 and n_bars < 252) else "FULL_HISTORY"
+
         ret = {
             "status": st,
             "actual_sample_bars": n_bars,
@@ -903,12 +760,8 @@ class MasterThesisCalculator:
         if disp > 40.0:
             ret["estimator_dispersion_regime"] = "EXTREME_DISPERSION"
         if check_seasoning:
-            ret["listing_seasoning"] = (
-                "ESTABLISHED_LISTING" if total_avail >= 250 else "UNSEASONED_LISTING"
-            )
+            ret["listing_seasoning"] = "ESTABLISHED_LISTING" if total_avail >= 250 else "UNSEASONED_LISTING"
             ret["total_available_bars"] = total_avail
             if st == "PARTIAL_HISTORY":
-                ret["sample_bars_note"] = (
-                    "lookback_satisfies_minimum_threshold_below_target"
-                )
+                ret["sample_bars_note"] = "lookback_satisfies_minimum_threshold_below_target"
         return ret

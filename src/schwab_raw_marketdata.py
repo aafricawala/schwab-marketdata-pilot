@@ -90,18 +90,19 @@ def extract_strict_underlying_data(
     asset_main = str(ref.get("assetMainType", "") or "").upper()
     desc = str(ref.get("description", "") or "").upper()
 
-    # DEF-ADV-174: Robust structural wrapper & ETN classification
-    is_structural_wrapper = (
-        clean_sym in ["USOI", "MUU", "DXYZ"]
-        or asset_sub in ["ETF", "ETN", "MUTUAL_FUND", "CEF"]
-        or asset_main in ["ETF", "ETN", "MUTUAL_FUND", "FUND"]
-        or bool(
-            re.search(
-                r"\b(EXCHANGE TRADED NOTE|ETRACS|NOTE|ETN|ETF|FUND|TRUST|INDEX NOTE|CEF|CLOSED-END|DLY|BULL|BEAR|2X|3X)\b",
-                desc,
-            )
+    # Structural Pooled Vehicle Classification (Defensive Regex + Vendor Attributes, Zero Hardcoded Symbols)
+    is_fund_type = (
+        asset_sub in ["ETF", "ETN", "MUTUAL_FUND", "CEF", "UIT", "OPEN_END_FUND", "CLOSED_END_FUND"]
+        or asset_main in ["ETF", "ETN", "MUTUAL_FUND", "FUND", "COLLECTIVE_INVESTMENT"]
+    )
+    desc_pooled_match = bool(
+        re.search(
+            r"\b(ETF|ETN|FUND|TRUST|INDEX|PORTFOLIO|SHARES|NOTE|ETRACS|HOLDINGS|COMMODITY|CURRENCY|GOLD|SILVER|AGRICULTURE|BULL|BEAR|2X|3X)\b",
+            desc,
         )
     )
+    raw_shares = safe_float(fund.get("sharesOutstanding"))
+    is_structural_wrapper = is_fund_type or (desc_pooled_match and (raw_shares is None or raw_shares == 0.0 or is_fund_type))
 
     last_p = safe_float(quote.get("lastPrice"))
     close_p = safe_float(quote.get("closePrice"))
@@ -119,7 +120,6 @@ def extract_strict_underlying_data(
         q_time_iso = None
         q_age = None
 
-    # NEW-OBS-F: Detect unquoted / halted / delisted asset
     is_halted_or_unquoted = (last_p is None and close_p is None)
 
     if is_halted_or_unquoted:
@@ -137,7 +137,6 @@ def extract_strict_underlying_data(
     else:
         q_class = "UNKNOWN"
 
-    raw_shares = safe_float(fund.get("sharesOutstanding"))
     raw_pe = safe_float(fund.get("peRatio"))
     raw_eps = safe_float(fund.get("eps"))
     raw_div_amt = safe_float(fund.get("divAmount"))
@@ -164,36 +163,30 @@ def extract_strict_underlying_data(
     elif last_p == 0.0 or close_p == 0.0:
         shares_state = "CONFIRMED"
     elif is_foreign_adr:
-        if raw_shares is not None:
-            shares_state = "VENDOR_PROVIDED_FOREIGN_ISSUER_UNVERIFIED"
-        else:
-            shares_state = "UNAVAILABLE_FOR_FOREIGN_ADR"
+        shares_state = (
+            "VENDOR_PROVIDED_FOREIGN_ISSUER_UNVERIFIED"
+            if raw_shares is not None
+            else "UNAVAILABLE_FOR_FOREIGN_ADR"
+        )
     elif raw_shares is not None and raw_shares > 0:
         shares_state = "CONFIRMED"
     else:
         shares_state = "VENDOR_UNAVAILABLE"
 
     if is_halted_or_unquoted:
-        pe_val = None
-        pe_state = "VENDOR_UNAVAILABLE_ASSET_HALTED"
-        eps_val = None
-        eps_state = "VENDOR_UNAVAILABLE_ASSET_HALTED"
+        pe_val, pe_state = None, "VENDOR_UNAVAILABLE_ASSET_HALTED"
+        eps_val, eps_state = None, "VENDOR_UNAVAILABLE_ASSET_HALTED"
     elif is_structural_wrapper:
-        pe_val = None
-        pe_state = "NOT_APPLICABLE_ETF_OR_FUND"
-        eps_val = None
-        eps_state = "VENDOR_UNAVAILABLE_ETF_OR_ETN_NO_EPS"
+        pe_val, pe_state = None, "NOT_APPLICABLE_ETF_OR_FUND"
+        eps_val, eps_state = None, "VENDOR_UNAVAILABLE_ETF_OR_ETN_NO_EPS"
     elif last_p == 0.0 or close_p == 0.0:
-        pe_val = raw_pe
-        pe_state = "AS_REPORTED"
-        eps_val = raw_eps
-        eps_state = "AS_REPORTED"
+        pe_val, pe_state = raw_pe, "AS_REPORTED"
+        eps_val, eps_state = raw_eps, "AS_REPORTED"
     else:
         pe_val = raw_pe
         pe_state = "AS_REPORTED" if raw_pe is not None else "VENDOR_UNAVAILABLE"
         if is_foreign_adr and raw_eps is None:
-            eps_val = None
-            eps_state = "VENDOR_UNAVAILABLE_FOREIGN_ADR_SUPPRESSED"
+            eps_val, eps_state = None, "VENDOR_UNAVAILABLE_FOREIGN_ADR_SUPPRESSED"
         else:
             eps_val = raw_eps
             eps_state = "AS_REPORTED" if raw_eps is not None else "VENDOR_UNAVAILABLE"
@@ -209,7 +202,6 @@ def extract_strict_underlying_data(
         )
     )
 
-    # DEF-ADV-183: Reconcile Foreign ADR and Ghost Frequency
     div_freq_state = None
     if not is_zero_div and raw_div_y is not None and raw_div_y > 0.0:
         if raw_div_freq is None or raw_div_freq == 0.0:
@@ -228,38 +220,19 @@ def extract_strict_underlying_data(
 
     if net_m is not None and op_m is not None:
         if abs(net_m - op_m) < 1e-6 and abs(net_m) > 0.0:
-            margin_suspect = True
-            margin_reason = "vendor_net_and_operating_margins_identical"
-            margin_state = "SUSPECT_VENDOR_DATA"
+            margin_suspect, margin_reason, margin_state = True, "vendor_net_and_operating_margins_identical", "SUSPECT_VENDOR_DATA"
         else:
-            margin_suspect = False
-            margin_reason = "margins_structurally_differentiated"
-            margin_state = "CONFIRMED"
+            margin_suspect, margin_reason, margin_state = False, "margins_structurally_differentiated", "CONFIRMED"
     else:
-        margin_suspect = None
-        margin_reason = None
-        margin_state = "VENDOR_UNAVAILABLE_INPUTS_ABSENT"
+        margin_suspect, margin_reason, margin_state = None, None, "VENDOR_UNAVAILABLE_INPUTS_ABSENT"
 
     short_stat = ref.get("shortLocate", quote.get("shortLocate", {}))
-    is_shortable = (
-        ref.get("isShortable")
-        if ref.get("isShortable") is not None
-        else quote.get("isShortable", short_stat.get("isShortable"))
-    )
-    is_htb = (
-        ref.get("isHardToBorrow")
-        if ref.get("isHardToBorrow") is not None
-        else quote.get("isHardToBorrow", short_stat.get("isHardToBorrow"))
-    )
-    raw_htb_rate = safe_float(
-        ref.get("htbRate", quote.get("htbRate", short_stat.get("rate")))
-    )
+    is_shortable = ref.get("isShortable") if ref.get("isShortable") is not None else quote.get("isShortable", short_stat.get("isShortable"))
+    is_htb = ref.get("isHardToBorrow") if ref.get("isHardToBorrow") is not None else quote.get("isHardToBorrow", short_stat.get("isHardToBorrow"))
+    raw_htb_rate = safe_float(ref.get("htbRate", quote.get("htbRate", short_stat.get("rate"))))
 
     if is_shortable is None and is_htb is None and raw_htb_rate is None:
-        short_dict: Dict[str, Any] = {
-            "state": "UNKNOWN",
-            "reason": "locate_data_not_reported_by_venue_or_tier",
-        }
+        short_dict: Dict[str, Any] = {"state": "UNKNOWN", "reason": "locate_data_not_reported_by_venue_or_tier"}
     else:
         htb_rate_val = raw_htb_rate
         raw_htb_store = None
@@ -267,8 +240,7 @@ def extract_strict_underlying_data(
             htb_status = "NOT_APPLICABLE_ETB"
         elif raw_htb_rate is not None and raw_htb_rate < 0.0:
             htb_status = "INVALID_NEGATIVE_VENDOR_RATE"
-            raw_htb_store = raw_htb_rate
-            htb_rate_val = None
+            raw_htb_store, htb_rate_val = raw_htb_rate, None
         elif raw_htb_rate == 0.0:
             htb_status = "HTB_FLAG_ACTIVE_RATE_PENDING_BROKER_LOCATE"
         elif raw_htb_rate is not None:
@@ -277,11 +249,7 @@ def extract_strict_underlying_data(
             htb_status = "VENDOR_UNAVAILABLE_LOCATE_PENDING"
 
         short_dict = {
-            "state": (
-                "FULL_PASSTHROUGH"
-                if all(v is not None for v in [is_shortable, is_htb])
-                else "PARTIAL_PASSTHROUGH"
-            ),
+            "state": "FULL_PASSTHROUGH" if all(v is not None for v in [is_shortable, is_htb]) else "PARTIAL_PASSTHROUGH",
             "isShortable": bool(is_shortable) if is_shortable is not None else True,
             "isHardToBorrow": bool(is_htb) if is_htb is not None else False,
             "htbRate": htb_rate_val,
@@ -297,26 +265,19 @@ def extract_strict_underlying_data(
     tot_vol = safe_float(quote.get("totalVolume", 0.0))
 
     liq_state = "FULL_PASSTHROUGH"
-    book_note = None
-    book_reason = None
-    spread_warn = None
+    book_note, book_reason, spread_warn = None, None, None
 
     if is_halted_or_unquoted:
-        liq_state = "UNVERIFIED_EMPTY_ORDER_BOOK"
-        book_reason = "asset_halted_or_unquoted"
-        book_note = "EMPTY_ORDER_BOOK_ASSET_HALTED"
+        liq_state, book_reason, book_note = "UNVERIFIED_EMPTY_ORDER_BOOK", "asset_halted_or_unquoted", "EMPTY_ORDER_BOOK_ASSET_HALTED"
     elif bid_s == 0.0 and ask_s == 0.0:
         liq_state = "UNVERIFIED_EMPTY_ORDER_BOOK"
         if tot_vol is not None and tot_vol > 0.0:
-            book_reason = "zero_bid_ask_depth_with_reported_volume"
-            book_note = "ZERO_BID_ASK_DEPTH_REPORTED"
+            book_reason, book_note = "zero_bid_ask_depth_with_reported_volume", "ZERO_BID_ASK_DEPTH_REPORTED"
         else:
-            book_reason = "zero_book_activity_recorded"
-            book_note = "EMPTY_ORDER_BOOK_NO_VOLUME"
+            book_reason, book_note = "zero_book_activity_recorded", "EMPTY_ORDER_BOOK_NO_VOLUME"
 
     if bid_p is not None and ask_p is not None and bid_p > 0.0:
-        rel_spr = (ask_p - bid_p) / bid_p
-        if rel_spr > 2.0:
+        if (ask_p - bid_p) / bid_p > 2.0:
             spread_warn = "EXTREME_SPREAD_EXCEEDS_200_PCT_HEURISTIC"
 
     liq_dict: Dict[str, Any] = {
@@ -327,21 +288,12 @@ def extract_strict_underlying_data(
         "askSize": ask_s,
         "totalVolume": tot_vol,
         "vol10DayAvg": safe_float(fund.get("vol10DayAvg")),
-        "vol10DayAvg_state": (
-            "AS_REPORTED"
-            if fund.get("vol10DayAvg") is not None
-            else "VENDOR_UNAVAILABLE"
-        ),
+        "vol10DayAvg_state": "AS_REPORTED" if fund.get("vol10DayAvg") is not None else "VENDOR_UNAVAILABLE",
         "vol3MonthAvg_state": "VENDOR_FIELD_NOT_PROVIDED",
         "vol1YearAvg": safe_float(fund.get("vol1YearAvg")),
         "vol1YearAvg_state": (
-            "VENDOR_SUSPECT_ZERO"
-            if fund.get("vol1YearAvg") == 0.0
-            else (
-                "AS_REPORTED"
-                if fund.get("vol1YearAvg") is not None
-                else "VENDOR_UNAVAILABLE"
-            )
+            "VENDOR_SUSPECT_ZERO" if fund.get("vol1YearAvg") == 0.0
+            else ("AS_REPORTED" if fund.get("vol1YearAvg") is not None else "VENDOR_UNAVAILABLE")
         ),
     }
     if book_reason:
@@ -353,23 +305,13 @@ def extract_strict_underlying_data(
 
     fund_dict: Dict[str, Any] = {
         "beta": safe_float(fund.get("beta")),
-        "beta_state": (
-            "AS_REPORTED" if fund.get("beta") is not None else "VENDOR_UNAVAILABLE"
-        ),
+        "beta_state": "AS_REPORTED" if fund.get("beta") is not None else "VENDOR_UNAVAILABLE",
         "peRatio": pe_val,
         "peRatio_state": pe_state,
         "pegRatio": safe_float(fund.get("pegRatio")),
-        "pegRatio_state": (
-            "AS_REPORTED"
-            if fund.get("pegRatio") is not None
-            else "VENDOR_UNAVAILABLE"
-        ),
+        "pegRatio_state": "AS_REPORTED" if fund.get("pegRatio") is not None else "VENDOR_UNAVAILABLE",
         "pcfRatio": safe_float(fund.get("pcfRatio")),
-        "pcfRatio_state": (
-            "AS_REPORTED"
-            if fund.get("pcfRatio") is not None
-            else "VENDOR_UNAVAILABLE"
-        ),
+        "pcfRatio_state": "AS_REPORTED" if fund.get("pcfRatio") is not None else "VENDOR_UNAVAILABLE",
         "pbRatio": safe_float(fund.get("pbRatio")),
         "totalDebtToEquity": safe_float(fund.get("totalDebtToEquity")),
         "totalDebtToEquity_basis": "VENDOR_RAW_UNVERIFIED",
@@ -380,25 +322,13 @@ def extract_strict_underlying_data(
         "margin_fields_suspect_reason": margin_reason,
         "margin_fields_suspect_state": margin_state,
         "returnOnEquity": safe_float(fund.get("returnOnEquity")),
-        "returnOnEquity_state": (
-            "AS_REPORTED"
-            if fund.get("returnOnEquity") is not None
-            else "VENDOR_UNAVAILABLE"
-        ),
+        "returnOnEquity_state": "AS_REPORTED" if fund.get("returnOnEquity") is not None else "VENDOR_UNAVAILABLE",
         "returnOnAssets": safe_float(fund.get("returnOnAssets")),
-        "returnOnAssets_state": (
-            "AS_REPORTED"
-            if fund.get("returnOnAssets") is not None
-            else "VENDOR_UNAVAILABLE"
-        ),
+        "returnOnAssets_state": "AS_REPORTED" if fund.get("returnOnAssets") is not None else "VENDOR_UNAVAILABLE",
         "eps": eps_val,
         "eps_state": eps_state,
         "revChangeYear": safe_float(fund.get("revChangeYear")),
-        "revChangeYear_state": (
-            "AS_REPORTED"
-            if fund.get("revChangeYear") is not None
-            else "VENDOR_UNAVAILABLE"
-        ),
+        "revChangeYear_state": "AS_REPORTED" if fund.get("revChangeYear") is not None else "VENDOR_UNAVAILABLE",
         "divYield": raw_div_y if raw_div_y is not None else 0.0,
         "divYield_basis": div_y_basis,
         "divYield_raw": raw_div_y if raw_div_y is not None else 0.0,
@@ -512,8 +442,7 @@ def resolve_optimal_expirations(
     t1 = t1_cands[-1] if t1_cands else sorted_exps[0]
     t2 = t2_cands[0] if t2_cands else sorted_exps[-1]
     targets = [front, t1, t2]
-    seen = set()
-    uniq = []
+    seen, uniq = set(), []
     for t in targets:
         k = t.get("expirationDate")
         if k not in seen:
