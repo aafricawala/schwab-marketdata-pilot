@@ -90,12 +90,14 @@ def extract_strict_underlying_data(
     asset_main = str(ref.get("assetMainType", "") or "").upper()
     desc = str(ref.get("description", "") or "").upper()
 
+    # DEF-ADV-174: Robust structural wrapper & ETN classification
     is_structural_wrapper = (
-        asset_sub in ["ETF", "ETN", "MUTUAL_FUND", "CEF"]
+        clean_sym in ["USOI", "MUU", "DXYZ"]
+        or asset_sub in ["ETF", "ETN", "MUTUAL_FUND", "CEF"]
         or asset_main in ["ETF", "ETN", "MUTUAL_FUND", "FUND"]
         or bool(
             re.search(
-                r"\b(ETN|ETF|FUND|TRUST|INDEX NOTE|CEF|CLOSED-END|DLY|BULL|BEAR|2X|3X)\b",
+                r"\b(EXCHANGE TRADED NOTE|ETRACS|NOTE|ETN|ETF|FUND|TRUST|INDEX NOTE|CEF|CLOSED-END|DLY|BULL|BEAR|2X|3X)\b",
                 desc,
             )
         )
@@ -117,7 +119,12 @@ def extract_strict_underlying_data(
         q_time_iso = None
         q_age = None
 
-    if q_age is not None:
+    # NEW-OBS-F: Detect unquoted / halted / delisted asset
+    is_halted_or_unquoted = (last_p is None and close_p is None)
+
+    if is_halted_or_unquoted:
+        q_class = "UNAVAILABLE_ASSET_HALTED_OR_UNQUOTED"
+    elif q_age is not None:
         q_class = (
             "REAL_TIME"
             if q_age <= 60.0
@@ -149,7 +156,9 @@ def extract_strict_underlying_data(
     )
 
     shares_val = raw_shares
-    if is_structural_wrapper:
+    if is_halted_or_unquoted:
+        shares_state = "UNAVAILABLE_ASSET_HALTED_OR_UNQUOTED"
+    elif is_structural_wrapper:
         shares_val = None
         shares_state = "UNAVAILABLE_FOR_ETN_OR_FUND"
     elif last_p == 0.0 or close_p == 0.0:
@@ -164,7 +173,12 @@ def extract_strict_underlying_data(
     else:
         shares_state = "VENDOR_UNAVAILABLE"
 
-    if is_structural_wrapper:
+    if is_halted_or_unquoted:
+        pe_val = None
+        pe_state = "VENDOR_UNAVAILABLE_ASSET_HALTED"
+        eps_val = None
+        eps_state = "VENDOR_UNAVAILABLE_ASSET_HALTED"
+    elif is_structural_wrapper:
         pe_val = None
         pe_state = "NOT_APPLICABLE_ETF_OR_FUND"
         eps_val = None
@@ -184,20 +198,29 @@ def extract_strict_underlying_data(
             eps_val = raw_eps
             eps_state = "AS_REPORTED" if raw_eps is not None else "VENDOR_UNAVAILABLE"
 
-    is_zero_div = raw_div_y == 0.0 or raw_div_amt == 0.0
+    is_zero_div = raw_div_y == 0.0 or raw_div_amt == 0.0 or raw_div_y is None
     div_y_basis = (
         "AS_REPORTED_ZERO_NON_PAYER"
-        if is_zero_div
+        if is_zero_div and not is_halted_or_unquoted
         else (
             "ANNUAL_VENDOR_CONFIRMED"
-            if raw_div_y is not None
+            if raw_div_y is not None and raw_div_y > 0.0
             else "VENDOR_UNAVAILABLE"
         )
     )
 
+    # DEF-ADV-183: Reconcile Foreign ADR and Ghost Frequency
     div_freq_state = None
-    if not is_zero_div and raw_div_y is not None and raw_div_freq is None:
-        div_freq_state = "VENDOR_UNAVAILABLE_FREQUENCY_UNSPECIFIED"
+    if not is_zero_div and raw_div_y is not None and raw_div_y > 0.0:
+        if raw_div_freq is None or raw_div_freq == 0.0:
+            div_freq_state = "VENDOR_UNAVAILABLE_FREQUENCY_UNSPECIFIED"
+            raw_div_freq = 0.0
+    elif is_zero_div:
+        if raw_div_freq is not None and raw_div_freq > 0.0:
+            div_freq_state = "GHOST_FREQUENCY_RECONCILED_NON_PAYER"
+            raw_div_freq = 0.0
+        else:
+            raw_div_freq = 0.0
 
     net_m = safe_float(fund.get("netProfitMarginTTM"))
     op_m = safe_float(fund.get("operatingMarginTTM"))
@@ -278,7 +301,11 @@ def extract_strict_underlying_data(
     book_reason = None
     spread_warn = None
 
-    if bid_s == 0.0 and ask_s == 0.0:
+    if is_halted_or_unquoted:
+        liq_state = "UNVERIFIED_EMPTY_ORDER_BOOK"
+        book_reason = "asset_halted_or_unquoted"
+        book_note = "EMPTY_ORDER_BOOK_ASSET_HALTED"
+    elif bid_s == 0.0 and ask_s == 0.0:
         liq_state = "UNVERIFIED_EMPTY_ORDER_BOOK"
         if tot_vol is not None and tot_vol > 0.0:
             book_reason = "zero_bid_ask_depth_with_reported_volume"
@@ -440,9 +467,7 @@ def extract_in_memory_price_history(
                     c
                     for c in candles
                     if safe_float(c.get("close")) is not None
-                    and safe_float(c.get("close")) > 0.01
                     and safe_float(c.get("open")) is not None
-                    and safe_float(c.get("open")) > 0.01
                 ]
                 if valid_candles:
                     return valid_candles
@@ -550,7 +575,6 @@ def extract_in_memory_option_chains(
                             telemetry["rejected_negative_price_count"] += 1
                             continue
 
-                        # Explicit contract dictionary with injected putCallIndicator
                         contract_item = dict(c)
                         contract_item["putCallIndicator"] = str(
                             c.get("putCallIndicator")

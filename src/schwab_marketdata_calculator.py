@@ -57,6 +57,9 @@ class MasterThesisCalculator:
         self.quote_age = safe_float(
             self.raw.get("phase_0_grounding", {}).get("quote_age_seconds")
         )
+        self.q_class = str(
+            self.raw.get("phase_0_grounding", {}).get("quote_age_classification") or ""
+        )
         self.fund = self.raw.get("step_1_fundamentals", {})
         self.deriv = self.raw.get("step_3_and_7_derivatives", {})
         u_p = safe_float(
@@ -80,6 +83,12 @@ class MasterThesisCalculator:
         }
 
     def _calc_step_0(self) -> Dict[str, Any]:
+        if self.q_class == "UNAVAILABLE_ASSET_HALTED_OR_UNQUOTED":
+            return {
+                "session_gap_pct": None,
+                "state": "UNAVAILABLE_ASSET_HALTED_OR_UNQUOTED",
+                "session_gap_anchor": "PRIOR_SESSION_CLOSE_QUOTE",
+            }
         gap = (
             safe_div((self.spot - self.close) * 100.0, self.close)
             if self.spot and self.close
@@ -107,7 +116,8 @@ class MasterThesisCalculator:
         shares_state = str(self.fund.get("shares_outstanding_state") or "")
 
         is_halted = (
-            shares_state == "UNAVAILABLE_ASSET_HALTED_OR_UNQUOTED"
+            self.q_class == "UNAVAILABLE_ASSET_HALTED_OR_UNQUOTED"
+            or shares_state == "UNAVAILABLE_ASSET_HALTED_OR_UNQUOTED"
             or eps_state == "VENDOR_UNAVAILABLE_ASSET_HALTED"
             or pe_state == "VENDOR_UNAVAILABLE_ASSET_HALTED"
         )
@@ -289,7 +299,7 @@ class MasterThesisCalculator:
             calc["pe_eps_vintage_disparity"] = None
             calc["pe_eps_disparity_state"] = "NOT_APPLICABLE"
 
-        is_non_payer = div_y == 0.0 or div_amt == 0.0
+        is_non_payer = div_y == 0.0 or div_amt == 0.0 or div_y is None
         if is_halted:
             calc["dividend_payout_ratio_state"] = "NOT_APPLICABLE_ASSET_HALTED"
             calc["dividend_payout_ratio_reason"] = (
@@ -347,16 +357,11 @@ class MasterThesisCalculator:
             )
         elif is_etn:
             calc["state"] = "PARTIAL"
-            calc["coverage_unknown"] = (
-                True
-                if (eps is None and shares is None)
-                else (True if (div_y and div_y > 0 and eps is None) else False)
-            )
-            calc["full_capital_coverage_unknown"] = calc["coverage_unknown"]
+            calc["coverage_unknown"] = True
+            calc["full_capital_coverage_unknown"] = True
             calc["distribution_coverage_unknown"] = True
             calc["share_count_coverage_unknown"] = True
-            if calc["coverage_unknown"]:
-                calc["coverage_unknown_reason"] = "etn_or_fund_no_earnings_or_shares"
+            calc["coverage_unknown_reason"] = "etn_or_fund_no_earnings_or_shares"
             if div_y and div_y > 10.0 and self.calc_spot:
                 c_y = safe_div(div_amt * 100.0, self.calc_spot)
                 if c_y:
@@ -756,55 +761,59 @@ class MasterThesisCalculator:
     def _calc_step_5(self) -> Dict[str, Any]:
         pivots = {"state": "UNKNOWN", "reason": "insufficient_ohlc_bars"}
         rv = {"state": "UNKNOWN", "reason": "insufficient_ohlc_bars"}
-        if not self.ph_df.empty:
-            clean_bars = self.ph_df.dropna(
-                subset=["open", "high", "low", "close"]
-            ).sort_values("datetime" if "datetime" in self.ph_df.columns else self.ph_df.columns[0])
-            if not clean_bars.empty:
-                last_bar = clean_bars.iloc[-1]
-                h, l, c = (
-                    safe_float(last_bar.get("high", last_bar.get("highPrice"))),
-                    safe_float(last_bar.get("low", last_bar.get("lowPrice"))),
-                    safe_float(last_bar.get("close", last_bar.get("closePrice"))),
-                )
-                if (
-                    h is not None
-                    and l is not None
-                    and c is not None
-                    and h > 0
-                    and l > 0
-                    and c > 0
-                ):
-                    p = (h + l + c) / 3.0
-                    if p >= 0.005:
-                        pivots = {
-                            "Pivot": round(p, 2),
-                            "R1": round((2 * p) - l, 2),
-                            "R2": round(p + (h - l), 2),
-                            "R3": round(p + 2 * (h - l), 2),
-                            "S1": round((2 * p) - h, 2),
-                            "S2": round(p - (h - l), 2),
-                            "S3": round(p - 2 * (h - l), 2),
-                            "state": "CALCULATED",
-                        }
-                    else:
-                        pivots = {"state": "UNKNOWN", "reason": "candle_prices_non_positive"}
-                else:
-                    pivots = {"state": "UNKNOWN", "reason": "candle_prices_non_positive"}
 
-                c_series = clean_bars["close"] if "close" in clean_bars.columns else clean_bars.get("closePrice")
-                l_series = clean_bars["low"] if "low" in clean_bars.columns else clean_bars.get("lowPrice")
-                if (c_series is not None and (c_series <= 0.01).any()) or (
-                    l_series is not None and (l_series <= 0.01).any()
-                ):
-                    rv = {
-                        "state": "UNKNOWN",
-                        "reason": (
-                            "sub_cent_zero_price_bars_unsuitable_for_diffusion_estimators"
-                        ),
-                    }
-                else:
-                    rv = self._calc_realized_vol_suite(clean_bars)
+        if self.ph_df.empty:
+            return {"classical_floor_pivots": pivots, "realized_volatility": rv}
+
+        clean_bars = self.ph_df.dropna(
+            subset=["open", "high", "low", "close"]
+        ).sort_values("datetime" if "datetime" in self.ph_df.columns else self.ph_df.columns[0])
+
+        if clean_bars.empty:
+            return {"classical_floor_pivots": pivots, "realized_volatility": rv}
+
+        # DEF-ADV-178: Immediate sub-cent guard against diffusion estimators
+        c_series = clean_bars["close"]
+        l_series = clean_bars["low"]
+        if (c_series <= 0.01).any() or (l_series <= 0.01).any():
+            rv = {
+                "state": "UNKNOWN",
+                "reason": "sub_cent_zero_price_bars_unsuitable_for_diffusion_estimators",
+            }
+        else:
+            rv = self._calc_realized_vol_suite(clean_bars)
+
+        last_bar = clean_bars.iloc[-1]
+        h, l, c = (
+            safe_float(last_bar["high"]),
+            safe_float(last_bar["low"]),
+            safe_float(last_bar["close"]),
+        )
+        if (
+            h is not None
+            and l is not None
+            and c is not None
+            and h > 0
+            and l > 0
+            and c > 0
+        ):
+            p = (h + l + c) / 3.0
+            if p >= 0.005:
+                pivots = {
+                    "Pivot": round(p, 2),
+                    "R1": round((2 * p) - l, 2),
+                    "R2": round(p + (h - l), 2),
+                    "R3": round(p + 2 * (h - l), 2),
+                    "S1": round((2 * p) - h, 2),
+                    "S2": round(p - (h - l), 2),
+                    "S3": round(p - 2 * (h - l), 2),
+                    "state": "CALCULATED",
+                }
+            else:
+                pivots = {"state": "UNKNOWN", "reason": "candle_prices_non_positive"}
+        else:
+            pivots = {"state": "UNKNOWN", "reason": "candle_prices_non_positive"}
+
         return {"classical_floor_pivots": pivots, "realized_volatility": rv}
 
     def _calc_realized_vol_suite(self, df: pd.DataFrame) -> Dict[str, Any]:
@@ -832,10 +841,10 @@ class MasterThesisCalculator:
         n_bars = len(df)
         n_rets = max(0, n_bars - 1)
         c2c_vol = None
-        c_col = "close" if "close" in df.columns else "closePrice"
-        h_col = "high" if "high" in df.columns else "highPrice"
-        l_col = "low" if "low" in df.columns else "lowPrice"
-        o_col = "open" if "open" in df.columns else "openPrice"
+        c_col = "close"
+        h_col = "high"
+        l_col = "low"
+        o_col = "open"
 
         if n_rets >= 2 and c_col in df.columns:
             log_ret = np.log(df[c_col] / df[c_col].shift(1)).dropna()
