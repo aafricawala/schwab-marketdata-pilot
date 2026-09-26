@@ -47,6 +47,12 @@ class MasterThesisCalculator:
         u_p = safe_float(
             self.deriv.get("surface_parameters", {}).get("underlyingPrice")
         )
+
+        # NEW-OBS-O: Escalate vintage risk to HIGH if grounding spot is STALE (>5 hours / 18,000s)
+        is_stale_quote = (
+            (self.quote_age is not None and self.quote_age > 18000.0)
+            or (self.q_class == "STALE")
+        )
         if u_p is not None:
             self.calc_spot = u_p
             self.spot_source = "options_payload_underlyingPrice"
@@ -54,7 +60,7 @@ class MasterThesisCalculator:
         else:
             self.calc_spot = self.quote_last
             self.spot_source = "phase_0_grounding_last_price"
-            self.spot_vintage = "MEDIUM"
+            self.spot_vintage = "HIGH" if is_stale_quote else "MEDIUM"
 
     def calculate_metrics(self) -> Dict[str, Any]:
         return {
@@ -241,6 +247,7 @@ class MasterThesisCalculator:
             else None
         )
 
+        # NEW-OBS-M: Vintage disparity resolution for BRK/B and large-cap forward consensus
         if is_halted:
             calc["pe_eps_vintage_disparity"] = None
             calc["pe_eps_disparity_state"] = "NOT_APPLICABLE_ASSET_HALTED"
@@ -256,17 +263,30 @@ class MasterThesisCalculator:
             calc["implied_trailing_pe"] = round(imp_pe, 2)
             calc["pe_basis_note"] = "reported_pe_reflects_negative_forward_consensus_vs_positive_trailing_eps"
         elif not is_etn and pe and pe > 0 and imp_pe and imp_pe > 0:
-            disp_pct = round(abs(pe - imp_pe) / imp_pe * 100.0, 2)
-            has_disp = disp_pct > 10.0
-            disp_state = "SEVERE_VINTAGE_DISPARITY" if disp_pct > 100.0 else ("VINTAGE_DISPARITY" if has_disp else "WITHIN_TOLERANCE")
-            calc["pe_eps_vintage_disparity"] = has_disp
-            calc["pe_eps_disparity_state"] = disp_state
-            calc["implied_trailing_pe"] = round(imp_pe, 2)
-            calc["pe_eps_disparity_pct"] = disp_pct
-            if disp_pct > 100.0:
-                calc["pe_basis_note"] = "SEVERE_DISPARITY_CAUSE_UNVERIFIED"
-            elif has_disp:
-                calc["pe_basis_note"] = "reported_pe_reflects_forward_consensus_vs_trailing_eps"
+            abs_delta = abs(pe - imp_pe)
+            # Rule out sub-cent precision noise stubs (e.g. BRK/B: 0.01 vs 0.0108)
+            if abs_delta < 0.05 or pe <= 0.05 or imp_pe <= 0.05:
+                calc["pe_eps_vintage_disparity"] = False
+                calc["pe_eps_disparity_state"] = "WITHIN_TOLERANCE"
+                calc["implied_trailing_pe"] = round(imp_pe, 2)
+                calc["pe_eps_disparity_pct"] = 0.0
+            else:
+                disp_pct = round(abs_delta / imp_pe * 100.0, 2)
+                # Broaden tolerance band: >50% for consensus vintage shift; >100% severe
+                has_disp = disp_pct > 50.0 and abs_delta > 2.0
+                disp_state = (
+                    "SEVERE_VINTAGE_DISPARITY"
+                    if disp_pct > 100.0
+                    else ("VINTAGE_DISPARITY" if has_disp else "WITHIN_TOLERANCE")
+                )
+                calc["pe_eps_vintage_disparity"] = has_disp
+                calc["pe_eps_disparity_state"] = disp_state
+                calc["implied_trailing_pe"] = round(imp_pe, 2)
+                calc["pe_eps_disparity_pct"] = disp_pct
+                if disp_pct > 100.0:
+                    calc["pe_basis_note"] = "SEVERE_DISPARITY_CAUSE_UNVERIFIED"
+                elif has_disp:
+                    calc["pe_basis_note"] = "reported_pe_reflects_forward_consensus_vs_trailing_eps"
         else:
             calc["pe_eps_vintage_disparity"] = None
             calc["pe_eps_disparity_state"] = "NOT_APPLICABLE"
@@ -404,27 +424,42 @@ class MasterThesisCalculator:
         df = self.opt_df.copy()
         puts = df[df["putCallIndicator"] == "PUT"]
         calls = df[df["putCallIndicator"] == "CALL"]
-        p_vol = puts["totalVolume"].sum() if "totalVolume" in puts.columns else 0.0
-        c_vol = calls["totalVolume"].sum() if "totalVolume" in calls.columns else 0.0
-        p_oi = puts["openInterest"].sum() if "openInterest" in puts.columns else 0.0
-        c_oi = calls["openInterest"].sum() if "openInterest" in calls.columns else 0.0
+
+        vol_col = "totalVolume" if "totalVolume" in df.columns else ("volume" if "volume" in df.columns else None)
+        oi_col = "openInterest" if "openInterest" in df.columns else ("open_interest" if "open_interest" in df.columns else None)
+
+        p_vol = puts[vol_col].sum() if vol_col else 0.0
+        c_vol = calls[vol_col].sum() if vol_col else 0.0
+        p_oi = puts[oi_col].sum() if oi_col else 0.0
+        c_oi = calls[oi_col].sum() if oi_col else 0.0
+
         vr = safe_div(p_vol, c_vol)
         oir = safe_div(p_oi, c_oi)
-
         tot_vol = (p_vol or 0.0) + (c_vol or 0.0)
-        flow_state = "CALCULATED" if (c_vol > 0 and c_oi > 0 and p_vol is not None and p_oi is not None) else "UNKNOWN"
 
-        if flow_state == "CALCULATED":
-            if vr is None:
-                regime = "NO_OPTIONS_VOLUME"
-            elif vr < 0.50:
+        # NEW-OBS-N: If both ratios null -> UNCONDITIONALLY state: UNKNOWN
+        if vr is not None and oir is not None:
+            flow_state = "CALCULATED"
+            if vr < 0.50:
                 regime = "HEAVY_CALL_FLOW"
             elif vr > 2.00:
                 regime = "HEAVY_PUT_FLOW"
             else:
                 regime = "NEUTRAL"
+        elif vr is not None or oir is not None:
+            flow_state = "PARTIAL"
+            regime = (
+                "HEAVY_CALL_FLOW"
+                if (vr is not None and vr < 0.50)
+                else (
+                    "HEAVY_PUT_FLOW"
+                    if (vr is not None and vr > 2.00)
+                    else ("NEUTRAL" if vr is not None else "UNCLASSIFIED")
+                )
+            )
         else:
-            regime = "UNCLASSIFIED"
+            flow_state = "UNKNOWN"
+            regime = "NO_OPTIONS_VOLUME" if tot_vol == 0.0 else "UNCLASSIFIED"
 
         flow: Dict[str, Any] = {
             "put_call_volume_ratio": round(vr, 4) if vr is not None else None,
@@ -433,22 +468,24 @@ class MasterThesisCalculator:
             "state": flow_state,
         }
 
-        if flow_state == "UNKNOWN":
+        # NEW-OBS-X: Deterministic hierarchy for reasons & non-colliding notes
+        if flow_state in ("UNKNOWN", "PARTIAL"):
             if tot_vol == 0.0:
                 flow["reason"] = "options_chain_has_zero_contract_volume"
-            elif c_oi == 0:
+            elif c_oi == 0.0:
                 flow["reason"] = "zero_call_open_interest_on_traded_chain"
-            elif p_oi == 0:
+            elif p_oi == 0.0:
                 flow["reason"] = "zero_put_open_interest_on_traded_chain"
-            elif c_vol == 0:
+            elif c_vol == 0.0:
                 flow["reason"] = "zero_call_volume_on_active_chain"
             else:
                 flow["reason"] = "insufficient_liquidity_across_options_surface"
 
-        if p_vol == 0.0 and c_vol > 0.0:
-            flow["flow_ratios_note"] = "ZERO_PUT_VOLUME_OBSERVED"
-        if p_oi == 0.0 and c_oi > 0.0:
-            flow["flow_oi_note"] = "ZERO_PUT_OPEN_INTEREST_OBSERVED"
+            # Emit observational notes only if they do not duplicate the primary reason
+            if p_vol == 0.0 and c_vol > 0.0 and flow["reason"] != "options_chain_has_zero_contract_volume":
+                flow["flow_ratios_note"] = "ZERO_PUT_VOLUME_OBSERVED"
+            if p_oi == 0.0 and c_oi > 0.0 and flow["reason"] != "zero_put_open_interest_on_traded_chain":
+                flow["flow_oi_note"] = "ZERO_PUT_OPEN_INTEREST_OBSERVED"
 
         skew_block = self._calc_skew_30d(df, cmi_block)
         atm_block = self._calc_atm_straddle(df)
@@ -785,8 +822,26 @@ class MasterThesisCalculator:
         park = float(np.sqrt((1.0 / (4.0 * np.log(2.0))) * (hl**2).mean()) * np.sqrt(252) * 100.0)
         gk = float(np.sqrt((0.5 * (hl**2) - ((2.0 * np.log(2.0) - 1.0) * (co**2))).mean()) * np.sqrt(252) * 100.0)
         disp = abs((c2c_vol or gk) - gk)
-        st = "PARTIAL_HISTORY" if (target_win == 252 and n_bars < 252) else "FULL_HISTORY"
 
+        # NEW-OBS-U: Extreme dispersion and excessive volatility regime suppression
+        if disp > 100.0 or gk > 200.0 or (c2c_vol is not None and c2c_vol > 200.0):
+            suppressed_dict: Dict[str, Any] = {
+                "state": "UNKNOWN",
+                "reason": "extreme_dispersion_regime_suppresses_estimator",
+                "target_window_bars": target_win,
+                "actual_sample_bars": n_bars,
+                "return_observations": n_rets,
+                "unsuppressed_dispersion_pp": round(disp, 4),
+                "unsuppressed_garman_klass": round(gk, 4),
+            }
+            if c2c_vol is not None:
+                suppressed_dict["unsuppressed_close_to_close"] = round(c2c_vol, 4)
+            if check_seasoning:
+                suppressed_dict["listing_seasoning"] = "ESTABLISHED_LISTING" if total_avail >= 250 else "UNSEASONED_LISTING"
+                suppressed_dict["total_available_bars"] = total_avail
+            return suppressed_dict
+
+        st = "PARTIAL_HISTORY" if (target_win == 252 and n_bars < 252) else "FULL_HISTORY"
         ret: Dict[str, Any] = {
             "status": st,
             "actual_sample_bars": n_bars,
@@ -797,8 +852,10 @@ class MasterThesisCalculator:
             "estimator_dispersion_pp": round(disp, 4),
             "estimator_methodology": "Garman-Klass (1980) zero-drift invariant",
         }
+
         if disp > 40.0:
             ret["estimator_dispersion_regime"] = "EXTREME_DISPERSION"
+
         if check_seasoning:
             ret["listing_seasoning"] = "ESTABLISHED_LISTING" if total_avail >= 250 else "UNSEASONED_LISTING"
             ret["total_available_bars"] = total_avail
