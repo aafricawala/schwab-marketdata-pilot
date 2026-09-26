@@ -413,7 +413,7 @@ def extract_in_memory_price_history(
     ext_hrs = config.get("HISTORICAL_NEED_EXTENDED_HOURS", False)
 
     attempts = [
-        {},  # Default 1-year daily call verified in diagnostic
+        {},
         {
             "period_type": p_type,
             "period": p_val,
@@ -525,7 +525,7 @@ def extract_in_memory_option_chains(
             underlying_price = safe_float(payload.get("underlyingPrice"))
         if vol_30d is None:
             vol_30d = safe_float(payload.get("volatility"))
-        for book_key in ["callExpDateMap", "putExpDateMap"]:
+        for book_key, default_indicator in [("callExpDateMap", "CALL"), ("putExpDateMap", "PUT")]:
             book = payload.get(book_key, {})
             for date_key, strikes in book.items():
                 for strike_key, contract_list in strikes.items():
@@ -549,9 +549,16 @@ def extract_in_memory_option_chains(
                         ):
                             telemetry["rejected_negative_price_count"] += 1
                             continue
-                        all_contracts.append(c)
 
-    # If target expirations exist, attempt targeted extraction first
+                        # Explicit contract dictionary with injected putCallIndicator
+                        contract_item = dict(c)
+                        contract_item["putCallIndicator"] = str(
+                            c.get("putCallIndicator")
+                            or c.get("putCallType")
+                            or default_indicator
+                        ).upper()
+                        all_contracts.append(contract_item)
+
     if target_expirations:
         for exp in target_expirations:
             exp_date_raw = exp.get("expirationDate")
@@ -593,7 +600,6 @@ def extract_in_memory_option_chains(
             if payload:
                 _parse_chain_payload(payload)
 
-    # Fallback: if targeted calls produced 0 contracts, execute full chain retrieval verified in diagnostic
     if not all_contracts:
         try:
             r = client.get_option_chain(clean_sym)
