@@ -405,15 +405,15 @@ def extract_strict_underlying_data(
 def extract_in_memory_price_history(
     client: Any, symbol: str, config: Dict[str, Any]
 ) -> List[Dict[str, Any]]:
+    clean_sym = symbol.strip().upper()
     p_type = config.get("HISTORICAL_PERIOD_TYPE", "year")
     p_val = config.get("HISTORICAL_PERIOD", 1)
     f_type = config.get("HISTORICAL_FREQUENCY_TYPE", "daily")
     f_val = config.get("HISTORICAL_FREQUENCY", 1)
     ext_hrs = config.get("HISTORICAL_NEED_EXTENDED_HOURS", False)
 
-    clean_sym = symbol.strip().upper()
-
     attempts = [
+        {},  # Default 1-year daily call verified in diagnostic
         {
             "period_type": p_type,
             "period": p_val,
@@ -428,38 +428,7 @@ def extract_in_memory_price_history(
             "frequency": f_val,
             "need_extended_hours_data": ext_hrs,
         },
-        {
-            "periodType": str(p_type).lower(),
-            "period": p_val,
-            "frequencyType": str(f_type).lower(),
-            "frequency": f_val,
-            "needExtendedHoursData": ext_hrs,
-        },
-        {
-            "periodType": str(p_type).upper(),
-            "period": p_val,
-            "frequencyType": str(f_type).upper(),
-            "frequency": f_val,
-            "needExtendedHoursData": ext_hrs,
-        },
     ]
-
-    try:
-        if hasattr(client, "PriceHistory"):
-            attempts.insert(
-                0,
-                {
-                    "period_type": getattr(client.PriceHistory.PeriodType, p_type.upper()),
-                    "period": p_val,
-                    "frequency_type": getattr(
-                        client.PriceHistory.FrequencyType, f_type.upper()
-                    ),
-                    "frequency": f_val,
-                    "need_extended_hours_data": ext_hrs,
-                },
-            )
-    except Exception:
-        pass
 
     for kwargs in attempts:
         try:
@@ -485,13 +454,18 @@ def extract_in_memory_price_history(
 def extract_in_memory_option_expirations(
     client: Any, symbol: str
 ) -> List[Dict[str, Any]]:
-    try:
-        r = client.get_option_expiration_chain(symbol)
-        d = _parse_client_response(r)
-        if d:
-            return d.get("expirationList", []) or []
-    except Exception:
-        pass
+    clean_sym = symbol.strip().upper()
+    methods = ["get_option_expirations", "get_option_expiration_chain"]
+    for m in methods:
+        if hasattr(client, m):
+            try:
+                fn = getattr(client, m)
+                r = fn(clean_sym)
+                d = _parse_client_response(r)
+                if d:
+                    return d.get("expirationList", []) or []
+            except Exception:
+                continue
     return []
 
 
@@ -539,74 +513,18 @@ def extract_in_memory_option_chains(
         "rejected_negative_mark_count": 0,
         "rejected_negative_price_count": 0,
     }
-    if not target_expirations:
-        return None, None, [], telemetry
 
     clean_sym = symbol.strip().upper()
     all_contracts: List[Dict[str, Any]] = []
     underlying_price = None
     vol_30d = None
 
-    for exp in target_expirations:
-        exp_date_raw = exp.get("expirationDate")
-        if not exp_date_raw:
-            continue
-
-        date_obj = None
-        try:
-            date_obj = datetime.strptime(str(exp_date_raw)[:10], "%Y-%m-%d").date()
-        except Exception:
-            pass
-
-        call_attempts = []
-        if date_obj is not None:
-            call_attempts.append({
-                "strike_count": strike_window,
-                "from_date": date_obj,
-                "to_date": date_obj,
-                "strategy": strategy,
-            })
-            call_attempts.append({
-                "strikeCount": strike_window,
-                "fromDate": date_obj,
-                "toDate": date_obj,
-                "strategy": strategy,
-            })
-
-        call_attempts.append({
-            "strike_count": strike_window,
-            "from_date": exp_date_raw,
-            "to_date": exp_date_raw,
-            "strategy": strategy,
-        })
-        call_attempts.append({
-            "strikeCount": strike_window,
-            "fromDate": exp_date_raw,
-            "toDate": exp_date_raw,
-            "strategy": strategy,
-        })
-
-        payload = None
-        for kwargs in call_attempts:
-            try:
-                r = client.get_option_chain(clean_sym, **kwargs)
-                parsed = _parse_client_response(r)
-                if parsed and (
-                    "callExpDateMap" in parsed or "putExpDateMap" in parsed
-                ):
-                    payload = parsed
-                    break
-            except Exception:
-                continue
-
-        if not payload:
-            continue
-
+    def _parse_chain_payload(payload: Dict[str, Any]) -> None:
+        nonlocal underlying_price, vol_30d
         if underlying_price is None:
             underlying_price = safe_float(payload.get("underlyingPrice"))
         if vol_30d is None:
             vol_30d = safe_float(payload.get("volatility"))
-
         for book_key in ["callExpDateMap", "putExpDateMap"]:
             book = payload.get(book_key, {})
             for date_key, strikes in book.items():
@@ -632,5 +550,57 @@ def extract_in_memory_option_chains(
                             telemetry["rejected_negative_price_count"] += 1
                             continue
                         all_contracts.append(c)
+
+    # If target expirations exist, attempt targeted extraction first
+    if target_expirations:
+        for exp in target_expirations:
+            exp_date_raw = exp.get("expirationDate")
+            if not exp_date_raw:
+                continue
+
+            date_obj = None
+            try:
+                date_obj = datetime.strptime(str(exp_date_raw)[:10], "%Y-%m-%d").date()
+            except Exception:
+                pass
+
+            call_attempts = []
+            if date_obj is not None:
+                call_attempts.append({
+                    "strike_count": strike_window,
+                    "from_date": date_obj,
+                    "to_date": date_obj,
+                    "strategy": strategy,
+                })
+            call_attempts.append({
+                "strike_count": strike_window,
+                "from_date": exp_date_raw,
+                "to_date": exp_date_raw,
+                "strategy": strategy,
+            })
+
+            payload = None
+            for kwargs in call_attempts:
+                try:
+                    r = client.get_option_chain(clean_sym, **kwargs)
+                    parsed = _parse_client_response(r)
+                    if parsed and ("callExpDateMap" in parsed or "putExpDateMap" in parsed):
+                        payload = parsed
+                        break
+                except Exception:
+                    continue
+
+            if payload:
+                _parse_chain_payload(payload)
+
+    # Fallback: if targeted calls produced 0 contracts, execute full chain retrieval verified in diagnostic
+    if not all_contracts:
+        try:
+            r = client.get_option_chain(clean_sym)
+            parsed = _parse_client_response(r)
+            if parsed and ("callExpDateMap" in parsed or "putExpDateMap" in parsed):
+                _parse_chain_payload(parsed)
+        except Exception:
+            pass
 
     return vol_30d, underlying_price, all_contracts, telemetry
