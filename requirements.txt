@@ -1,1 +1,29 @@
-requests
+# ─────────────────────────────────────────────────────────────────────────────
+# Runtime dependencies
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Python runtime
+# Required: >= 3.9  (stdlib `zoneinfo` is used by schwab_market_session,
+#                    schwab_grounding_schema, and schwab_underlying_grounding)
+# If the project must target 3.8, uncomment the backport below.
+# backports.zoneinfo; python_version < "3.9"
+
+# Vendor SDK — duck-typed in code as `client` (never imported by name).
+# The refactored schwab_* modules call, on `client`:
+#   get_market_hours, get_quote, get_price_history,
+#   get_option_chain, get_option_expirations | get_option_expiration_chain
+# Pin the actual distribution that provides those methods.
+# <vendor-sdk-package>==<version>
+
+# Data
+# NOTE: schwab_raw_marketdata.py originally imported `pandas` but never used it.
+# The refactored schwab_* modules do NOT import pandas at all.
+# Keep pandas ONLY if other modules in the project use it.
+# pandas>=<floor>,<<ceiling>
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Development / test dependencies  (consider moving to requirements-dev.txt)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# pytest>=<floor>
+# pytest-asyncio>=<floor>   # only if you add async vendor-call tests
