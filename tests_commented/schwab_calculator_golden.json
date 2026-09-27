@@ -1,0 +1,123 @@
+{
+  "step_0_grounding": {
+    "session_gap_anchor": "PRIOR_SESSION_CLOSE_QUOTE",
+    "session_gap_pct": 0.4926,
+    "state": "CALCULATED"
+  },
+  "step_1_fundamentals_and_quality": {
+    "coverage_unknown": false,
+    "distribution_coverage_unknown": false,
+    "dividend_payout_ratio_health": "SUSTAINABLE",
+    "dividend_payout_ratio_state": "CALCULATED",
+    "earnings_yield_pct": 4.4444,
+    "earnings_yield_state": "CALCULATED",
+    "full_capital_coverage_unknown": false,
+    "implied_trailing_pe": 24.88,
+    "imputed_dividend_payout_ratio_pct": 29.27,
+    "market_cap_divergence": {
+      "derived_market_cap": 102000000000.0,
+      "market_cap_divergence_abs_usd": 500000000.0,
+      "market_cap_divergence_pct": 0.4878,
+      "market_cap_divergence_reason": "within_5pct_reconciliation_band",
+      "market_cap_divergence_state": "CALCULATED",
+      "reported_market_cap": 102500000000.0
+    },
+    "payout_exceeds_earnings": false,
+    "pe_eps_disparity_pct": 9.56,
+    "pe_eps_disparity_state": "WITHIN_TOLERANCE",
+    "pe_eps_vintage_disparity": false,
+    "share_count_coverage_unknown": false,
+    "state": "CALCULATED"
+  },
+  "step_3_and_7_derivatives_and_surface": {
+    "atm_event_straddle": {
+      "atm_strike": 102.0,
+      "combined_straddle_cost": 4.08,
+      "expected_move_pct": 3.4,
+      "factor_basis": "PRACTITIONER_FAT_TAIL_ADJUSTED_CONVENTION",
+      "front_expiry_dte": 7,
+      "state": "CALCULATED"
+    },
+    "constant_maturity_30d_iv": {
+      "bracket_quality": "WIDE",
+      "bracket_span_days": 14,
+      "constant_maturity_30d_iv": 0.2525,
+      "state": "CALCULATED",
+      "t1_dte": 21,
+      "t2_dte": 35
+    },
+    "flow_ratios": {
+      "put_call_open_interest_ratio": null,
+      "put_call_volume_ratio": null,
+      "reason": "insufficient_liquidity_across_options_surface",
+      "state": "UNKNOWN",
+      "volume_regime": "UNCLASSIFIED"
+    },
+    "skew_30d": {
+      "bracket_quality": "WIDE",
+      "bracket_span_days": 14,
+      "skew_30d_iv_differential": -0.004,
+      "skew_actual_call_delta": 0.2,
+      "skew_actual_put_delta": -0.2,
+      "skew_anchor_reason": "PRIMARY_BAND_VIOLATED",
+      "skew_delta_anchor": "FALLBACK_NEAREST_SYMMETRIC",
+      "skew_delta_symmetry_gap": 0.0,
+      "skew_regime": "STANDARD_PUT_SKEW",
+      "skew_tenor_dte": 35,
+      "spread_tolerance_source": "DEFAULT_EXECUTION_BOUNDARY",
+      "state": "CALCULATED"
+    },
+    "spot_provenance": {
+      "observed_price": 102.0,
+      "source": "options_payload_underlyingPrice",
+      "vintage_risk": "LOW"
+    }
+  },
+  "step_5_technicals_and_flows": {
+    "classical_floor_pivots": {
+      "Pivot": 59.83,
+      "R1": 60.09,
+      "R2": 60.22,
+      "R3": 60.61,
+      "S1": 59.69,
+      "S2": 59.44,
+      "S3": 59.04,
+      "state": "CALCULATED"
+    },
+    "realized_volatility": {
+      "10d_tactical": {
+        "actual_sample_bars": 11,
+        "close_to_close": 24.7214,
+        "estimator_dispersion_pp": NaN,
+        "estimator_methodology": "Garman-Klass (1980) zero-drift invariant",
+        "garman_klass": NaN,
+        "parkinson": 6.2938,
+        "return_observations": 10,
+        "status": "FULL_HISTORY"
+      },
+      "252d_macro": {
+        "actual_sample_bars": 253,
+        "close_to_close": 17.649,
+        "estimator_dispersion_pp": NaN,
+        "estimator_methodology": "Garman-Klass (1980) zero-drift invariant",
+        "garman_klass": NaN,
+        "listing_seasoning": "ESTABLISHED_LISTING",
+        "parkinson": 6.5371,
+        "return_observations": 252,
+        "status": "FULL_HISTORY",
+        "total_available_bars": 260
+      },
+      "30d_intermediate": {
+        "actual_sample_bars": 31,
+        "close_to_close": 21.1781,
+        "estimator_dispersion_pp": NaN,
+        "estimator_methodology": "Garman-Klass (1980) zero-drift invariant",
+        "garman_klass": NaN,
+        "parkinson": 6.6334,
+        "return_observations": 30,
+        "status": "FULL_HISTORY"
+      },
+      "state": "CALCULATED"
+    }
+  }
+}
