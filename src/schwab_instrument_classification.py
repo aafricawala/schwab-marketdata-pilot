@@ -14,7 +14,7 @@ import re
 from typing import Any, Dict, Optional
 
 
-def is_warrant(
+def classify_warrant(
     asset_sub: str, asset_main: str, desc: str, clean_sym: str
 ) -> bool:
     return (
@@ -25,7 +25,7 @@ def is_warrant(
     )
 
 
-def is_mutual_fund(
+def classify_mutual_fund(
     asset_sub: str, asset_main: str, clean_sym: str
 ) -> bool:
     return (
@@ -35,7 +35,7 @@ def is_mutual_fund(
     )
 
 
-def is_fund_type(
+def classify_fund_type(
     asset_sub: str, asset_main: str, mutual_fund_flag: bool
 ) -> bool:
     return (
@@ -45,7 +45,7 @@ def is_fund_type(
     )
 
 
-def desc_pooled_match(desc: str) -> bool:
+def classify_desc_pooled_match(desc: str) -> bool:
     return bool(
         re.search(
             r"\b(ETF|ETN|MUTUAL FUND|INDEX FUND|TRUST|INDEX|PORTFOLIO|ETRACS|TREASURY BOND|BOND FUND|ADMIRAL|INVESTOR CLASS)\b",
@@ -54,13 +54,13 @@ def desc_pooled_match(desc: str) -> bool:
     )
 
 
-def is_structural_wrapper(
+def classify_structural_wrapper(
     warrant_flag: bool, fund_type_flag: bool, pooled_match: bool
 ) -> bool:
     return not warrant_flag and (fund_type_flag or pooled_match)
 
 
-def is_foreign_country(country: str) -> bool:
+def classify_foreign_country(country: str) -> bool:
     return (
         bool(country)
         and bool(re.match(r"^[A-Z]{2,3}$", country))
@@ -68,7 +68,7 @@ def is_foreign_country(country: str) -> bool:
     )
 
 
-def is_foreign_adr(
+def classify_foreign_adr(
     desc: str,
     asset_sub: str,
     foreign_country_flag: bool,

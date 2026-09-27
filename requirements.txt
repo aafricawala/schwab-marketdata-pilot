@@ -12,18 +12,16 @@
 # The refactored schwab_* modules call, on `client`:
 #   get_market_hours, get_quote, get_price_history,
 #   get_option_chain, get_option_expirations | get_option_expiration_chain
-# Pin the actual distribution that provides those methods.
-# <vendor-sdk-package>==<version>
+# Replace the line below with the actual distribution + version pin:
+<PLACEHOLDER_VENDOR_SDK>          # e.g. schwab-py==1.4.0
 
 # Data
-# NOTE: schwab_raw_marketdata.py originally imported `pandas` but never used it.
-# The refactored schwab_* modules do NOT import pandas at all.
-# Keep pandas ONLY if other modules in the project use it.
-# pandas>=<floor>,<<ceiling>
+# The refactored schwab_* modules do NOT import pandas. Keep this line ONLY
+# if other modules in this project use pandas; otherwise delete this block.
+pandas>=2.0,<3.0
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Development / test dependencies  (consider moving to requirements-dev.txt)
 # ─────────────────────────────────────────────────────────────────────────────
 
-# pytest>=<floor>
-# pytest-asyncio>=<floor>   # only if you add async vendor-call tests
+pytest>=7.4
