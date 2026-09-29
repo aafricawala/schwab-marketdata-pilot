@@ -16,9 +16,12 @@
 # Outputs: Various schwab datatypes and integration results.
 # Notes: None.
 
-# Define a new function or method
+# Explain this line: def test_import():...
+# Line: def test_import():
 def test_import():
-    # Import specific components from a module
+    # Explain this line: from schwab_client import SchwabClient...
+    # Line: from schwab_client import SchwabClient
     from schwab_client import SchwabClient
-    # Execute this line of logic to process the data
+    # Explain this line: assert SchwabClient is not None...
+    # Line: assert SchwabClient is not None
     assert SchwabClient is not None

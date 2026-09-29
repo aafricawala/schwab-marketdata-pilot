@@ -17,597 +17,868 @@
 # Notes: None.
 
 """
-# Execute this line of logic to process the data
 schwab_refactor_payload_mock_test.py
 
-# Execute this line of logic to process the data
 Stub-driven payload-stability test for the schwab_* refactor.
-# Execute this line of logic to process the data
 No unittest.mock, no network. Uses a hand-rolled FakeClient.
 """
-# Import specific components from a module
+# Explain this line: from __future__ import annotations...
+# Line: from __future__ import annotations
 from __future__ import annotations
 
-# Import the required external module
+# Explain this line: import json...
+# Line: import json
 import json
-# Import the required external module
+# Explain this line: import os...
+# Line: import os
 import os
-# Import specific components from a module
+# Explain this line: from datetime import datetime, timezone...
+# Line: from datetime import datetime, timezone
 from datetime import datetime, timezone
-# Import specific components from a module
+# Explain this line: from pathlib import Path...
+# Line: from pathlib import Path
 from pathlib import Path
-# Import specific components from a module
+# Explain this line: from typing import Any, Dict, List, Opti...
+# Line: from typing import Any, Dict, List, Optional
 from typing import Any, Dict, List, Optional
-# Import specific components from a module
+# Explain this line: from zoneinfo import ZoneInfo...
+# Line: from zoneinfo import ZoneInfo
 from zoneinfo import ZoneInfo
 
-# Import the required external module
+# Explain this line: import pytest...
+# Line: import pytest
 import pytest
 
-# Import the required external module
+# Explain this line: import schwab_raw_marketdata as facade...
+# Line: import schwab_raw_marketdata as facade
 import schwab_raw_marketdata as facade
 
 
-# Assign a value or initialize a variable
+# Explain this line: GOLDEN_PATH = Path(__file__).with_name("...
+# Line: GOLDEN_PATH = Path(__file__).with_name("schwab_ref
 GOLDEN_PATH = Path(__file__).with_name("schwab_refactor_golden.json")
-# Assign a value or initialize a variable
+# Explain this line: REGENERATE = os.environ.get("REGENERATE"...
+# Line: REGENERATE = os.environ.get("REGENERATE") == "1"
 REGENERATE = os.environ.get("REGENERATE") == "1"
-# Assign a value or initialize a variable
+# Explain this line: TZ_ET = ZoneInfo("America/New_York")...
+# Line: TZ_ET = ZoneInfo("America/New_York")
 TZ_ET = ZoneInfo("America/New_York")
 
 
-# Define a new data structure or class
+# Explain this line: class FakeResponse:...
+# Line: class FakeResponse:
 class FakeResponse:
-    # Define a new function or method
+    # Explain this line: def __init__(self, status_code: int, pay...
+    # Line: def __init__(self, status_code: int, payload: Opti
     def __init__(self, status_code: int, payload: Optional[dict] = None):
-        # Assign a value or initialize a variable
+        # Explain this line: self.status_code = status_code...
+        # Line: self.status_code = status_code
         self.status_code = status_code
-        # Assign a value or initialize a variable
+        # Explain this line: self._payload = payload or {}...
+        # Line: self._payload = payload or {}
         self._payload = payload or {}
 
-    # Define a new function or method
+    # Explain this line: def json(self) -> dict:...
+    # Line: def json(self) -> dict:
     def json(self) -> dict:
-        # Return the final computed result to the caller
+        # Explain this line: return self._payload...
+        # Line: return self._payload
         return self._payload
 
 
-# Define a new data structure or class
+# Explain this line: class FakeClient:...
+# Line: class FakeClient:
 class FakeClient:
-    # Define a new function or method
+    # Explain this line: def __init__(...
+    # Line: def __init__(
     def __init__(
-        # Execute this line of logic to process the data
+        # Explain this line: self,...
+        # Line: self,
         self,
-        # Assign a value or initialize a variable
+        # Explain this line: quotes: Optional[Dict[str, Dict[str, Any...
+        # Line: quotes: Optional[Dict[str, Dict[str, Any]]] = None
         quotes: Optional[Dict[str, Dict[str, Any]]] = None,
-        # Assign a value or initialize a variable
+        # Explain this line: market_hours: Optional[Dict[str, Any]] =...
+        # Line: market_hours: Optional[Dict[str, Any]] = None,
         market_hours: Optional[Dict[str, Any]] = None,
-        # Assign a value or initialize a variable
+        # Explain this line: price_history: Optional[Dict[str, Any]] ...
+        # Line: price_history: Optional[Dict[str, Any]] = None,
         price_history: Optional[Dict[str, Any]] = None,
-        # Assign a value or initialize a variable
+        # Explain this line: expirations: Optional[Dict[str, Any]] = ...
+        # Line: expirations: Optional[Dict[str, Any]] = None,
         expirations: Optional[Dict[str, Any]] = None,
-        # Assign a value or initialize a variable
+        # Explain this line: option_chains: Optional[Dict[str, Dict[s...
+        # Line: option_chains: Optional[Dict[str, Dict[str, Any]]]
         option_chains: Optional[Dict[str, Dict[str, Any]]] = None,
-    # Execute this line of logic to process the data
+    # Explain this line: ):...
+    # Line: ):
     ):
-        # Assign a value or initialize a variable
+        # Explain this line: self._quotes = quotes or {}...
+        # Line: self._quotes = quotes or {}
         self._quotes = quotes or {}
-        # Assign a value or initialize a variable
+        # Explain this line: self._market_hours = market_hours or {"e...
+        # Line: self._market_hours = market_hours or {"equity": {"
         self._market_hours = market_hours or {"equity": {"EQ": {"isOpen": True}}}
-        # Assign a value or initialize a variable
+        # Explain this line: self._price_history = price_history or {...
+        # Line: self._price_history = price_history or {"candles":
         self._price_history = price_history or {"candles": []}
-        # Assign a value or initialize a variable
+        # Explain this line: self._expirations = expirations or {"exp...
+        # Line: self._expirations = expirations or {"expirationLis
         self._expirations = expirations or {"expirationList": []}
-        # Assign a value or initialize a variable
+        # Explain this line: self._option_chains = option_chains or {...
+        # Line: self._option_chains = option_chains or {}
         self._option_chains = option_chains or {}
 
-    # Define a new function or method
+    # Explain this line: def get_market_hours(self, product: str)...
+    # Line: def get_market_hours(self, product: str) -> Any:
     def get_market_hours(self, product: str) -> Any:
-        # Return the final computed result to the caller
+        # Explain this line: return FakeResponse(200, self._market_ho...
+        # Line: return FakeResponse(200, self._market_hours)
         return FakeResponse(200, self._market_hours)
 
-    # Define a new function or method
+    # Explain this line: def get_quote(self, symbol: str) -> Any:...
+    # Line: def get_quote(self, symbol: str) -> Any:
     def get_quote(self, symbol: str) -> Any:
-        # Assign a value or initialize a variable
+        # Explain this line: inner = self._quotes.get(symbol)...
+        # Line: inner = self._quotes.get(symbol)
         inner = self._quotes.get(symbol)
-        # Check a conditional statement
+        # Explain this line: if inner is None:...
+        # Line: if inner is None:
         if inner is None:
-            # Return the final computed result to the caller
+            # Explain this line: return FakeResponse(200, {})...
+            # Line: return FakeResponse(200, {})
             return FakeResponse(200, {})
-        # Return the final computed result to the caller
+        # Explain this line: return FakeResponse(200, {symbol: inner}...
+        # Line: return FakeResponse(200, {symbol: inner})
         return FakeResponse(200, {symbol: inner})
 
-    # Define a new function or method
+    # Explain this line: def get_price_history(self, symbol: str,...
+    # Line: def get_price_history(self, symbol: str, **kwargs:
     def get_price_history(self, symbol: str, **kwargs: Any) -> Any:
-        # Return the final computed result to the caller
+        # Explain this line: return FakeResponse(200, self._price_his...
+        # Line: return FakeResponse(200, self._price_history)
         return FakeResponse(200, self._price_history)
 
-    # Define a new function or method
+    # Explain this line: def get_option_expirations(self, symbol:...
+    # Line: def get_option_expirations(self, symbol: str) -> A
     def get_option_expirations(self, symbol: str) -> Any:
-        # Return the final computed result to the caller
+        # Explain this line: return FakeResponse(200, self._expiratio...
+        # Line: return FakeResponse(200, self._expirations)
         return FakeResponse(200, self._expirations)
 
-    # Define a new function or method
+    # Explain this line: def get_option_chain(self, symbol: str, ...
+    # Line: def get_option_chain(self, symbol: str, **kwargs:
     def get_option_chain(self, symbol: str, **kwargs: Any) -> Any:
-        # Check a conditional statement
+        # Explain this line: if "from_date" in kwargs and "to_date" i...
+        # Line: if "from_date" in kwargs and "to_date" in kwargs:
         if "from_date" in kwargs and "to_date" in kwargs:
-            # Return the final computed result to the caller
+            # Explain this line: return FakeResponse(200, self._option_ch...
+            # Line: return FakeResponse(200, self._option_chains.get("
             return FakeResponse(200, self._option_chains.get("targeted", {}))
-        # Return the final computed result to the caller
+        # Explain this line: return FakeResponse(200, self._option_ch...
+        # Line: return FakeResponse(200, self._option_chains.get("
         return FakeResponse(200, self._option_chains.get("default", {}))
 
 
-# Define a new function or method
+# Explain this line: def _now_ms() -> int:...
+# Line: def _now_ms() -> int:
 def _now_ms() -> int:
-    # Return the final computed result to the caller
+    # Explain this line: return 1735689600000  # frozen: 2025-01-...
+    # Line: return 1735689600000  # frozen: 2025-01-01T00:00:0
     return 1735689600000  # frozen: 2025-01-01T00:00:00Z
 
 
-# Assign a value or initialize a variable
+# Explain this line: FIXTURES: List[Dict[str, Any]] = [...
+# Line: FIXTURES: List[Dict[str, Any]] = [
 FIXTURES: List[Dict[str, Any]] = [
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "name": "equity_us_live",...
+        # Line: "name": "equity_us_live",
         "name": "equity_us_live",
-        # Execute this line of logic to process the data
+        # Explain this line: "client": {...
+        # Line: "client": {
         "client": {
-            # Execute this line of logic to process the data
+            # Explain this line: "quotes": {...
+            # Line: "quotes": {
             "quotes": {
-                # Execute this line of logic to process the data
+                # Explain this line: "AAPL": {...
+                # Line: "AAPL": {
                 "AAPL": {
-                    # Execute this line of logic to process the data
+                    # Explain this line: "reference": {...
+                    # Line: "reference": {
                     "reference": {
-                        # Execute this line of logic to process the data
+                        # Explain this line: "assetSubType": "COMMON_STOCK",...
+                        # Line: "assetSubType": "COMMON_STOCK",
                         "assetSubType": "COMMON_STOCK",
-                        # Execute this line of logic to process the data
+                        # Explain this line: "assetMainType": "EQUITY",...
+                        # Line: "assetMainType": "EQUITY",
                         "assetMainType": "EQUITY",
-                        # Execute this line of logic to process the data
+                        # Explain this line: "description": "APPLE INC",...
+                        # Line: "description": "APPLE INC",
                         "description": "APPLE INC",
-                        # Execute this line of logic to process the data
+                        # Explain this line: "country": "US",...
+                        # Line: "country": "US",
                         "country": "US",
-                    # Execute this line of logic to process the data
+                    # Explain this line: },...
+                    # Line: },
                     },
-                    # Execute this line of logic to process the data
+                    # Explain this line: "quote": {...
+                    # Line: "quote": {
                     "quote": {
-                        # Execute this line of logic to process the data
+                        # Explain this line: "lastPrice": 187.45,...
+                        # Line: "lastPrice": 187.45,
                         "lastPrice": 187.45,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "closePrice": 186.10,...
+                        # Line: "closePrice": 186.10,
                         "closePrice": 186.10,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "quoteTime": _now_ms() - 5_000,...
+                        # Line: "quoteTime": _now_ms() - 5_000,
                         "quoteTime": _now_ms() - 5_000,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "bidPrice": 187.40,...
+                        # Line: "bidPrice": 187.40,
                         "bidPrice": 187.40,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "askPrice": 187.50,...
+                        # Line: "askPrice": 187.50,
                         "askPrice": 187.50,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "bidSize": 300.0,...
+                        # Line: "bidSize": 300.0,
                         "bidSize": 300.0,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "askSize": 200.0,...
+                        # Line: "askSize": 200.0,
                         "askSize": 200.0,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "totalVolume": 12_345_678.0,...
+                        # Line: "totalVolume": 12_345_678.0,
                         "totalVolume": 12_345_678.0,
-                    # Execute this line of logic to process the data
+                    # Explain this line: },...
+                    # Line: },
                     },
-                    # Execute this line of logic to process the data
+                    # Explain this line: "fundamental": {...
+                    # Line: "fundamental": {
                     "fundamental": {
-                        # Execute this line of logic to process the data
+                        # Explain this line: "peRatio": 29.8,...
+                        # Line: "peRatio": 29.8,
                         "peRatio": 29.8,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "eps": 6.29,...
+                        # Line: "eps": 6.29,
                         "eps": 6.29,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "divYield": 0.0055,...
+                        # Line: "divYield": 0.0055,
                         "divYield": 0.0055,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "divAmount": 1.03,...
+                        # Line: "divAmount": 1.03,
                         "divAmount": 1.03,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "divFreq": 4.0,...
+                        # Line: "divFreq": 4.0,
                         "divFreq": 4.0,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "beta": 1.28,...
+                        # Line: "beta": 1.28,
                         "beta": 1.28,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "sharesOutstanding": 15_500_000_000.0,...
+                        # Line: "sharesOutstanding": 15_500_000_000.0,
                         "sharesOutstanding": 15_500_000_000.0,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "netProfitMarginTTM": 0.25,...
+                        # Line: "netProfitMarginTTM": 0.25,
                         "netProfitMarginTTM": 0.25,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "operatingMarginTTM": 0.30,...
+                        # Line: "operatingMarginTTM": 0.30,
                         "operatingMarginTTM": 0.30,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "grossMarginTTM": 0.44,...
+                        # Line: "grossMarginTTM": 0.44,
                         "grossMarginTTM": 0.44,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "vol10DayAvg": 55_000_000.0,...
+                        # Line: "vol10DayAvg": 55_000_000.0,
                         "vol10DayAvg": 55_000_000.0,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "vol1YearAvg": 60_000_000.0,...
+                        # Line: "vol1YearAvg": 60_000_000.0,
                         "vol1YearAvg": 60_000_000.0,
-                    # Execute this line of logic to process the data
+                    # Explain this line: },...
+                    # Line: },
                     },
-                # Execute this line of logic to process the data
+                # Explain this line: }...
+                # Line: }
                 }
-            # Execute this line of logic to process the data
+            # Explain this line: }...
+            # Line: }
             }
-        # Execute this line of logic to process the data
+        # Explain this line: },...
+        # Line: },
         },
-        # Execute this line of logic to process the data
+        # Explain this line: "call": {"fn": "extract_strict_underlyin...
+        # Line: "call": {"fn": "extract_strict_underlying_data", "
         "call": {"fn": "extract_strict_underlying_data", "args": ("AAPL",)},
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "name": "warrant",...
+        # Line: "name": "warrant",
         "name": "warrant",
-        # Execute this line of logic to process the data
+        # Explain this line: "client": {...
+        # Line: "client": {
         "client": {
-            # Execute this line of logic to process the data
+            # Explain this line: "quotes": {...
+            # Line: "quotes": {
             "quotes": {
-                # Execute this line of logic to process the data
+                # Explain this line: "ABCD.WS": {...
+                # Line: "ABCD.WS": {
                 "ABCD.WS": {
-                    # Execute this line of logic to process the data
+                    # Explain this line: "reference": {...
+                    # Line: "reference": {
                     "reference": {
-                        # Execute this line of logic to process the data
+                        # Explain this line: "assetSubType": "WARRANT",...
+                        # Line: "assetSubType": "WARRANT",
                         "assetSubType": "WARRANT",
-                        # Execute this line of logic to process the data
+                        # Explain this line: "assetMainType": "WARRANT",...
+                        # Line: "assetMainType": "WARRANT",
                         "assetMainType": "WARRANT",
-                        # Execute this line of logic to process the data
+                        # Explain this line: "description": "ABCD ACQUISITION WARRANT...
+                        # Line: "description": "ABCD ACQUISITION WARRANT",
                         "description": "ABCD ACQUISITION WARRANT",
-                    # Execute this line of logic to process the data
+                    # Explain this line: },...
+                    # Line: },
                     },
-                    # Execute this line of logic to process the data
+                    # Explain this line: "quote": {...
+                    # Line: "quote": {
                     "quote": {
-                        # Execute this line of logic to process the data
+                        # Explain this line: "lastPrice": 0.75,...
+                        # Line: "lastPrice": 0.75,
                         "lastPrice": 0.75,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "closePrice": 0.74,...
+                        # Line: "closePrice": 0.74,
                         "closePrice": 0.74,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "quoteTime": _now_ms() - 5_000,...
+                        # Line: "quoteTime": _now_ms() - 5_000,
                         "quoteTime": _now_ms() - 5_000,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "bidPrice": 0.70,...
+                        # Line: "bidPrice": 0.70,
                         "bidPrice": 0.70,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "askPrice": 0.80,...
+                        # Line: "askPrice": 0.80,
                         "askPrice": 0.80,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "bidSize": 100.0,...
+                        # Line: "bidSize": 100.0,
                         "bidSize": 100.0,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "askSize": 100.0,...
+                        # Line: "askSize": 100.0,
                         "askSize": 100.0,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "totalVolume": 5_000.0,...
+                        # Line: "totalVolume": 5_000.0,
                         "totalVolume": 5_000.0,
-                    # Execute this line of logic to process the data
+                    # Explain this line: },...
+                    # Line: },
                     },
-                    # Execute this line of logic to process the data
+                    # Explain this line: "fundamental": {"sharesOutstanding": Non...
+                    # Line: "fundamental": {"sharesOutstanding": None},
                     "fundamental": {"sharesOutstanding": None},
-                # Execute this line of logic to process the data
+                # Explain this line: }...
+                # Line: }
                 }
-            # Execute this line of logic to process the data
+            # Explain this line: }...
+            # Line: }
             }
-        # Execute this line of logic to process the data
+        # Explain this line: },...
+        # Line: },
         },
-        # Execute this line of logic to process the data
+        # Explain this line: "call": {"fn": "extract_strict_underlyin...
+        # Line: "call": {"fn": "extract_strict_underlying_data", "
         "call": {"fn": "extract_strict_underlying_data", "args": ("ABCD.WS",)},
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "name": "etf",...
+        # Line: "name": "etf",
         "name": "etf",
-        # Execute this line of logic to process the data
+        # Explain this line: "client": {...
+        # Line: "client": {
         "client": {
-            # Execute this line of logic to process the data
+            # Explain this line: "quotes": {...
+            # Line: "quotes": {
             "quotes": {
-                # Execute this line of logic to process the data
+                # Explain this line: "SPY": {...
+                # Line: "SPY": {
                 "SPY": {
-                    # Execute this line of logic to process the data
+                    # Explain this line: "reference": {...
+                    # Line: "reference": {
                     "reference": {
-                        # Execute this line of logic to process the data
+                        # Explain this line: "assetSubType": "ETF",...
+                        # Line: "assetSubType": "ETF",
                         "assetSubType": "ETF",
-                        # Execute this line of logic to process the data
+                        # Explain this line: "assetMainType": "ETF",...
+                        # Line: "assetMainType": "ETF",
                         "assetMainType": "ETF",
-                        # Execute this line of logic to process the data
+                        # Explain this line: "description": "SPDR S&P 500 ETF TRUST",...
+                        # Line: "description": "SPDR S&P 500 ETF TRUST",
                         "description": "SPDR S&P 500 ETF TRUST",
-                    # Execute this line of logic to process the data
+                    # Explain this line: },...
+                    # Line: },
                     },
-                    # Execute this line of logic to process the data
+                    # Explain this line: "quote": {...
+                    # Line: "quote": {
                     "quote": {
-                        # Execute this line of logic to process the data
+                        # Explain this line: "lastPrice": 512.30,...
+                        # Line: "lastPrice": 512.30,
                         "lastPrice": 512.30,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "closePrice": 511.00,...
+                        # Line: "closePrice": 511.00,
                         "closePrice": 511.00,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "quoteTime": _now_ms() - 5_000,...
+                        # Line: "quoteTime": _now_ms() - 5_000,
                         "quoteTime": _now_ms() - 5_000,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "bidPrice": 512.25,...
+                        # Line: "bidPrice": 512.25,
                         "bidPrice": 512.25,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "askPrice": 512.35,...
+                        # Line: "askPrice": 512.35,
                         "askPrice": 512.35,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "bidSize": 1000.0,...
+                        # Line: "bidSize": 1000.0,
                         "bidSize": 1000.0,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "askSize": 800.0,...
+                        # Line: "askSize": 800.0,
                         "askSize": 800.0,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "totalVolume": 80_000_000.0,...
+                        # Line: "totalVolume": 80_000_000.0,
                         "totalVolume": 80_000_000.0,
-                    # Execute this line of logic to process the data
+                    # Explain this line: },...
+                    # Line: },
                     },
-                    # Execute this line of logic to process the data
+                    # Explain this line: "fundamental": {...
+                    # Line: "fundamental": {
                     "fundamental": {
-                        # Execute this line of logic to process the data
+                        # Explain this line: "divYield": 0.013,...
+                        # Line: "divYield": 0.013,
                         "divYield": 0.013,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "divAmount": 6.60,...
+                        # Line: "divAmount": 6.60,
                         "divAmount": 6.60,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "vol10DayAvg": 75_000_000.0,...
+                        # Line: "vol10DayAvg": 75_000_000.0,
                         "vol10DayAvg": 75_000_000.0,
-                    # Execute this line of logic to process the data
+                    # Explain this line: },...
+                    # Line: },
                     },
-                # Execute this line of logic to process the data
+                # Explain this line: }...
+                # Line: }
                 }
-            # Execute this line of logic to process the data
+            # Explain this line: }...
+            # Line: }
             }
-        # Execute this line of logic to process the data
+        # Explain this line: },...
+        # Line: },
         },
-        # Execute this line of logic to process the data
+        # Explain this line: "call": {"fn": "extract_strict_underlyin...
+        # Line: "call": {"fn": "extract_strict_underlying_data", "
         "call": {"fn": "extract_strict_underlying_data", "args": ("SPY",)},
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "name": "adr_foreign",...
+        # Line: "name": "adr_foreign",
         "name": "adr_foreign",
-        # Execute this line of logic to process the data
+        # Explain this line: "client": {...
+        # Line: "client": {
         "client": {
-            # Execute this line of logic to process the data
+            # Explain this line: "quotes": {...
+            # Line: "quotes": {
             "quotes": {
-                # Execute this line of logic to process the data
+                # Explain this line: "TSM": {...
+                # Line: "TSM": {
                 "TSM": {
-                    # Execute this line of logic to process the data
+                    # Explain this line: "reference": {...
+                    # Line: "reference": {
                     "reference": {
-                        # Execute this line of logic to process the data
+                        # Explain this line: "assetSubType": "ADR",...
+                        # Line: "assetSubType": "ADR",
                         "assetSubType": "ADR",
-                        # Execute this line of logic to process the data
+                        # Explain this line: "assetMainType": "EQUITY",...
+                        # Line: "assetMainType": "EQUITY",
                         "assetMainType": "EQUITY",
-                        # Execute this line of logic to process the data
+                        # Explain this line: "description": "TAIWAN SEMICONDUCTOR ADR...
+                        # Line: "description": "TAIWAN SEMICONDUCTOR ADR",
                         "description": "TAIWAN SEMICONDUCTOR ADR",
-                        # Execute this line of logic to process the data
+                        # Explain this line: "country": "TW",...
+                        # Line: "country": "TW",
                         "country": "TW",
-                    # Execute this line of logic to process the data
+                    # Explain this line: },...
+                    # Line: },
                     },
-                    # Execute this line of logic to process the data
+                    # Explain this line: "quote": {...
+                    # Line: "quote": {
                     "quote": {
-                        # Execute this line of logic to process the data
+                        # Explain this line: "lastPrice": 145.20,...
+                        # Line: "lastPrice": 145.20,
                         "lastPrice": 145.20,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "closePrice": 144.00,...
+                        # Line: "closePrice": 144.00,
                         "closePrice": 144.00,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "quoteTime": _now_ms() - 5_000,...
+                        # Line: "quoteTime": _now_ms() - 5_000,
                         "quoteTime": _now_ms() - 5_000,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "bidPrice": 145.15,...
+                        # Line: "bidPrice": 145.15,
                         "bidPrice": 145.15,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "askPrice": 145.25,...
+                        # Line: "askPrice": 145.25,
                         "askPrice": 145.25,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "bidSize": 400.0,...
+                        # Line: "bidSize": 400.0,
                         "bidSize": 400.0,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "askSize": 400.0,...
+                        # Line: "askSize": 400.0,
                         "askSize": 400.0,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "totalVolume": 8_000_000.0,...
+                        # Line: "totalVolume": 8_000_000.0,
                         "totalVolume": 8_000_000.0,
-                    # Execute this line of logic to process the data
+                    # Explain this line: },...
+                    # Line: },
                     },
-                    # Execute this line of logic to process the data
+                    # Explain this line: "fundamental": {...
+                    # Line: "fundamental": {
                     "fundamental": {
-                        # Execute this line of logic to process the data
+                        # Explain this line: "peRatio": 22.1,...
+                        # Line: "peRatio": 22.1,
                         "peRatio": 22.1,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "eps": None,...
+                        # Line: "eps": None,
                         "eps": None,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "sharesOutstanding": 5_000_000_000.0,...
+                        # Line: "sharesOutstanding": 5_000_000_000.0,
                         "sharesOutstanding": 5_000_000_000.0,
-                    # Execute this line of logic to process the data
+                    # Explain this line: },...
+                    # Line: },
                     },
-                # Execute this line of logic to process the data
+                # Explain this line: }...
+                # Line: }
                 }
-            # Execute this line of logic to process the data
+            # Explain this line: }...
+            # Line: }
             }
-        # Execute this line of logic to process the data
+        # Explain this line: },...
+        # Line: },
         },
-        # Execute this line of logic to process the data
+        # Explain this line: "call": {"fn": "extract_strict_underlyin...
+        # Line: "call": {"fn": "extract_strict_underlying_data", "
         "call": {"fn": "extract_strict_underlying_data", "args": ("TSM",)},
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "name": "halted_unquoted",...
+        # Line: "name": "halted_unquoted",
         "name": "halted_unquoted",
-        # Execute this line of logic to process the data
+        # Explain this line: "client": {...
+        # Line: "client": {
         "client": {
-            # Execute this line of logic to process the data
+            # Explain this line: "quotes": {...
+            # Line: "quotes": {
             "quotes": {
-                # Execute this line of logic to process the data
+                # Explain this line: "HALT": {...
+                # Line: "HALT": {
                 "HALT": {
-                    # Execute this line of logic to process the data
+                    # Explain this line: "reference": {...
+                    # Line: "reference": {
                     "reference": {
-                        # Execute this line of logic to process the data
+                        # Explain this line: "assetSubType": "COMMON_STOCK",...
+                        # Line: "assetSubType": "COMMON_STOCK",
                         "assetSubType": "COMMON_STOCK",
-                        # Execute this line of logic to process the data
+                        # Explain this line: "assetMainType": "EQUITY",...
+                        # Line: "assetMainType": "EQUITY",
                         "assetMainType": "EQUITY",
-                        # Execute this line of logic to process the data
+                        # Explain this line: "description": "HALTED CO",...
+                        # Line: "description": "HALTED CO",
                         "description": "HALTED CO",
-                    # Execute this line of logic to process the data
+                    # Explain this line: },...
+                    # Line: },
                     },
-                    # Execute this line of logic to process the data
+                    # Explain this line: "quote": {...
+                    # Line: "quote": {
                     "quote": {
-                        # Execute this line of logic to process the data
+                        # Explain this line: "lastPrice": 0.0,...
+                        # Line: "lastPrice": 0.0,
                         "lastPrice": 0.0,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "closePrice": 0.0,...
+                        # Line: "closePrice": 0.0,
                         "closePrice": 0.0,
-                        # Execute this line of logic to process the data
+                        # Explain this line: "quoteTime": 0,...
+                        # Line: "quoteTime": 0,
                         "quoteTime": 0,
-                    # Execute this line of logic to process the data
+                    # Explain this line: },...
+                    # Line: },
                     },
-                    # Execute this line of logic to process the data
+                    # Explain this line: "fundamental": {},...
+                    # Line: "fundamental": {},
                     "fundamental": {},
-                # Execute this line of logic to process the data
+                # Explain this line: }...
+                # Line: }
                 }
-            # Execute this line of logic to process the data
+            # Explain this line: }...
+            # Line: }
             }
-        # Execute this line of logic to process the data
+        # Explain this line: },...
+        # Line: },
         },
-        # Execute this line of logic to process the data
+        # Explain this line: "call": {"fn": "extract_strict_underlyin...
+        # Line: "call": {"fn": "extract_strict_underlying_data", "
         "call": {"fn": "extract_strict_underlying_data", "args": ("HALT",)},
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "name": "empty_envelope",...
+        # Line: "name": "empty_envelope",
         "name": "empty_envelope",
-        # Execute this line of logic to process the data
+        # Explain this line: "client": {"quotes": {}},...
+        # Line: "client": {"quotes": {}},
         "client": {"quotes": {}},
-        # Execute this line of logic to process the data
+        # Explain this line: "call": {"fn": "extract_strict_underlyin...
+        # Line: "call": {"fn": "extract_strict_underlying_data", "
         "call": {"fn": "extract_strict_underlying_data", "args": ("ZZZZ",)},
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "name": "option_expirations",...
+        # Line: "name": "option_expirations",
         "name": "option_expirations",
-        # Execute this line of logic to process the data
+        # Explain this line: "client": {...
+        # Line: "client": {
         "client": {
-            # Execute this line of logic to process the data
+            # Explain this line: "expirations": {...
+            # Line: "expirations": {
             "expirations": {
-                # Execute this line of logic to process the data
+                # Explain this line: "expirationList": [...
+                # Line: "expirationList": [
                 "expirationList": [
-                    # Execute this line of logic to process the data
+                    # Explain this line: {"expirationDate": "2025-01-17", "daysTo...
+                    # Line: {"expirationDate": "2025-01-17", "daysToExpiration
                     {"expirationDate": "2025-01-17", "daysToExpiration": 5},
-                    # Execute this line of logic to process the data
+                    # Explain this line: {"expirationDate": "2025-02-21", "daysTo...
+                    # Line: {"expirationDate": "2025-02-21", "daysToExpiration
                     {"expirationDate": "2025-02-21", "daysToExpiration": 40},
-                    # Execute this line of logic to process the data
+                    # Explain this line: {"expirationDate": "2025-06-20", "daysTo...
+                    # Line: {"expirationDate": "2025-06-20", "daysToExpiration
                     {"expirationDate": "2025-06-20", "daysToExpiration": 160},
-                    # Execute this line of logic to process the data
+                    # Explain this line: {"expirationDate": "2025-01-10", "daysTo...
+                    # Line: {"expirationDate": "2025-01-10", "daysToExpiration
                     {"expirationDate": "2025-01-10", "daysToExpiration": -2},
-                # Execute this line of logic to process the data
+                # Explain this line: ]...
+                # Line: ]
                 ]
-            # Execute this line of logic to process the data
+            # Explain this line: }...
+            # Line: }
             }
-        # Execute this line of logic to process the data
+        # Explain this line: },...
+        # Line: },
         },
-        # Execute this line of logic to process the data
+        # Explain this line: "call": {"fn": "extract_in_memory_option...
+        # Line: "call": {"fn": "extract_in_memory_option_expiratio
         "call": {"fn": "extract_in_memory_option_expirations", "args": ("AAPL",)},
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-# Execute this line of logic to process the data
+# Explain this line: ]...
+# Line: ]
 ]
 
 
-# Define a new function or method
+# Explain this line: def _build_client(spec: Dict[str, Any]) ...
+# Line: def _build_client(spec: Dict[str, Any]) -> FakeCli
 def _build_client(spec: Dict[str, Any]) -> FakeClient:
-    # Return the final computed result to the caller
+    # Explain this line: return FakeClient(**spec)...
+    # Line: return FakeClient(**spec)
     return FakeClient(**spec)
 
 
-# Define a new function or method
+# Explain this line: def _invoke(spec: Dict[str, Any], client...
+# Line: def _invoke(spec: Dict[str, Any], client: FakeClie
 def _invoke(spec: Dict[str, Any], client: FakeClient) -> Any:
-    # Assign a value or initialize a variable
+    # Explain this line: fn_name = spec["call"]["fn"]...
+    # Line: fn_name = spec["call"]["fn"]
     fn_name = spec["call"]["fn"]
-    # Assign a value or initialize a variable
+    # Explain this line: args = spec["call"].get("args", ())...
+    # Line: args = spec["call"].get("args", ())
     args = spec["call"].get("args", ())
-    # Assign a value or initialize a variable
+    # Explain this line: kwargs = spec["call"].get("kwargs", {})...
+    # Line: kwargs = spec["call"].get("kwargs", {})
     kwargs = spec["call"].get("kwargs", {})
-    # Assign a value or initialize a variable
+    # Explain this line: fn = getattr(facade, fn_name)...
+    # Line: fn = getattr(facade, fn_name)
     fn = getattr(facade, fn_name)
-    # Check a conditional statement
+    # Explain this line: if fn_name == "extract_strict_underlying...
+    # Line: if fn_name == "extract_strict_underlying_data":
     if fn_name == "extract_strict_underlying_data":
-        # Return the final computed result to the caller
+        # Explain this line: return fn(client, *args, TZ_ET, **kwargs...
+        # Line: return fn(client, *args, TZ_ET, **kwargs)
         return fn(client, *args, TZ_ET, **kwargs)
-    # Return the final computed result to the caller
+    # Explain this line: return fn(client, *args, **kwargs)...
+    # Line: return fn(client, *args, **kwargs)
     return fn(client, *args, **kwargs)
 
 
-# Assign a value or initialize a variable
+# Explain this line: _TIME_DERIVED_KEYS = {"quote_age_seconds...
+# Line: _TIME_DERIVED_KEYS = {"quote_age_seconds", "quoteT
 _TIME_DERIVED_KEYS = {"quote_age_seconds", "quoteTime_ISO_ET"}
 
 
-# Define a new function or method
+# Explain this line: def _scrub_time_fields(obj):...
+# Line: def _scrub_time_fields(obj):
 def _scrub_time_fields(obj):
     """Recursively drop time-derived fields that change between runs."""
-    # Check a conditional statement
+    # Explain this line: if isinstance(obj, dict):...
+    # Line: if isinstance(obj, dict):
     if isinstance(obj, dict):
-        # Return the final computed result to the caller
+        # Explain this line: return {k: _scrub_time_fields(v) for k, ...
+        # Line: return {k: _scrub_time_fields(v) for k, v in obj.i
         return {k: _scrub_time_fields(v) for k, v in obj.items() if k not in _TIME_DERIVED_KEYS}
-    # Check a conditional statement
+    # Explain this line: if isinstance(obj, list):...
+    # Line: if isinstance(obj, list):
     if isinstance(obj, list):
-        # Return the final computed result to the caller
+        # Explain this line: return [_scrub_time_fields(x) for x in o...
+        # Line: return [_scrub_time_fields(x) for x in obj]
         return [_scrub_time_fields(x) for x in obj]
-    # Return the final computed result to the caller
+    # Explain this line: return obj...
+    # Line: return obj
     return obj
 
 
-# Define a new function or method
+# Explain this line: def _load_goldens() -> Dict[str, Any]:...
+# Line: def _load_goldens() -> Dict[str, Any]:
 def _load_goldens() -> Dict[str, Any]:
-    # Check a conditional statement
+    # Explain this line: if not GOLDEN_PATH.exists():...
+    # Line: if not GOLDEN_PATH.exists():
     if not GOLDEN_PATH.exists():
-        # Return the final computed result to the caller
+        # Explain this line: return {}...
+        # Line: return {}
         return {}
-    # Return the final computed result to the caller
+    # Explain this line: return json.loads(GOLDEN_PATH.read_text(...
+    # Line: return json.loads(GOLDEN_PATH.read_text())
     return json.loads(GOLDEN_PATH.read_text())
 
 
-# Define a new function or method
+# Explain this line: def _save_goldens(goldens: Dict[str, Any...
+# Line: def _save_goldens(goldens: Dict[str, Any]) -> None
 def _save_goldens(goldens: Dict[str, Any]) -> None:
-    # Assign a value or initialize a variable
+    # Explain this line: GOLDEN_PATH.write_text(json.dumps(golden...
+    # Line: GOLDEN_PATH.write_text(json.dumps(goldens, indent=
     GOLDEN_PATH.write_text(json.dumps(goldens, indent=2, sort_keys=True, default=str))
 
 
-# Assign a value or initialize a variable
+# Explain this line: @pytest.mark.parametrize("spec", FIXTURE...
+# Line: @pytest.mark.parametrize("spec", FIXTURES, ids=[f[
 @pytest.mark.parametrize("spec", FIXTURES, ids=[f["name"] for f in FIXTURES])
-# Define a new function or method
+# Explain this line: def test_payload_matches_golden(spec: Di...
+# Line: def test_payload_matches_golden(spec: Dict[str, An
 def test_payload_matches_golden(spec: Dict[str, Any]) -> None:
-    # Assign a value or initialize a variable
+    # Explain this line: client = _build_client(spec["client"])...
+    # Line: client = _build_client(spec["client"])
     client = _build_client(spec["client"])
-    # Assign a value or initialize a variable
+    # Explain this line: actual = _invoke(spec, client)...
+    # Line: actual = _invoke(spec, client)
     actual = _invoke(spec, client)
-    # Assign a value or initialize a variable
+    # Explain this line: goldens = _load_goldens()...
+    # Line: goldens = _load_goldens()
     goldens = _load_goldens()
-    # Check a conditional statement
+    # Explain this line: if REGENERATE or spec["name"] not in gol...
+    # Line: if REGENERATE or spec["name"] not in goldens:
     if REGENERATE or spec["name"] not in goldens:
-        # Assign a value or initialize a variable
+        # Explain this line: goldens[spec["name"]] = actual...
+        # Line: goldens[spec["name"]] = actual
         goldens[spec["name"]] = actual
-        # Execute this line of logic to process the data
+        # Explain this line: _save_goldens(goldens)...
+        # Line: _save_goldens(goldens)
         _save_goldens(goldens)
-        # Execute this line of logic to process the data
+        # Explain this line: pytest.skip(f"Golden for '{spec['name']}...
+        # Line: pytest.skip(f"Golden for '{spec['name']}' written;
         pytest.skip(f"Golden for '{spec['name']}' written; re-run to assert.")
-    # Assign a value or initialize a variable
+    # Explain this line: expected = goldens[spec["name"]]...
+    # Line: expected = goldens[spec["name"]]
     expected = goldens[spec["name"]]
-    # Assign a value or initialize a variable
+    # Explain this line: assert _scrub_time_fields(actual) == _sc...
+    # Line: assert _scrub_time_fields(actual) == _scrub_time_f
     assert _scrub_time_fields(actual) == _scrub_time_fields(expected), (
-        # Execute this line of logic to process the data
+        # Explain this line: f"Payload drift in fixture '{spec['name'...
+        # Line: f"Payload drift in fixture '{spec['name']}'. "
         f"Payload drift in fixture '{spec['name']}'. "
-        # Assign a value or initialize a variable
+        # Explain this line: f"If intentional, regenerate with REGENE...
+        # Line: f"If intentional, regenerate with REGENERATE=1."
         f"If intentional, regenerate with REGENERATE=1."
-    # Execute this line of logic to process the data
+    # Explain this line: )...
+    # Line: )
     )
 
 
-# Define a new function or method
+# Explain this line: def test_private_aliases_resolve() -> No...
+# Line: def test_private_aliases_resolve() -> None:
 def test_private_aliases_resolve() -> None:
-    # Execute this line of logic to process the data
+    # Explain this line: assert callable(getattr(facade, "_parse_...
+    # Line: assert callable(getattr(facade, "_parse_client_res
     assert callable(getattr(facade, "_parse_client_response"))
-    # Execute this line of logic to process the data
+    # Explain this line: assert callable(getattr(facade, "_build_...
+    # Line: assert callable(getattr(facade, "_build_halted_gro
     assert callable(getattr(facade, "_build_halted_grounding"))
 
 
-# Define a new function or method
+# Explain this line: def test_facade_public_surface_complete(...
+# Line: def test_facade_public_surface_complete() -> None:
 def test_facade_public_surface_complete() -> None:
-    # Assign a value or initialize a variable
+    # Explain this line: expected = {...
+    # Line: expected = {
     expected = {
-        # Execute this line of logic to process the data
+        # Explain this line: "retry_vendor_call",...
+        # Line: "retry_vendor_call",
         "retry_vendor_call",
-        # Execute this line of logic to process the data
+        # Explain this line: "parse_client_response",...
+        # Line: "parse_client_response",
         "parse_client_response",
-        # Execute this line of logic to process the data
+        # Explain this line: "extract_market_open_status",...
+        # Line: "extract_market_open_status",
         "extract_market_open_status",
-        # Execute this line of logic to process the data
+        # Explain this line: "build_halted_grounding",...
+        # Line: "build_halted_grounding",
         "build_halted_grounding",
-        # Execute this line of logic to process the data
+        # Explain this line: "extract_strict_underlying_data",...
+        # Line: "extract_strict_underlying_data",
         "extract_strict_underlying_data",
-        # Execute this line of logic to process the data
+        # Explain this line: "extract_in_memory_price_history",...
+        # Line: "extract_in_memory_price_history",
         "extract_in_memory_price_history",
-        # Execute this line of logic to process the data
+        # Explain this line: "extract_in_memory_option_expirations",...
+        # Line: "extract_in_memory_option_expirations",
         "extract_in_memory_option_expirations",
-        # Execute this line of logic to process the data
+        # Explain this line: "resolve_optimal_expirations",...
+        # Line: "resolve_optimal_expirations",
         "resolve_optimal_expirations",
-        # Execute this line of logic to process the data
+        # Explain this line: "extract_in_memory_option_chains",...
+        # Line: "extract_in_memory_option_chains",
         "extract_in_memory_option_chains",
-        # Execute this line of logic to process the data
+        # Explain this line: "_parse_client_response",...
+        # Line: "_parse_client_response",
         "_parse_client_response",
-        # Execute this line of logic to process the data
+        # Explain this line: "_build_halted_grounding",...
+        # Line: "_build_halted_grounding",
         "_build_halted_grounding",
-    # Execute this line of logic to process the data
+    # Explain this line: }...
+    # Line: }
     }
-    # Assign a value or initialize a variable
+    # Explain this line: missing = {n for n in expected if not ha...
+    # Line: missing = {n for n in expected if not hasattr(faca
     missing = {n for n in expected if not hasattr(facade, n)}
-    # Execute this line of logic to process the data
+    # Explain this line: assert not missing, f"Facade missing re-...
+    # Line: assert not missing, f"Facade missing re-exports: {
     assert not missing, f"Facade missing re-exports: {sorted(missing)}"

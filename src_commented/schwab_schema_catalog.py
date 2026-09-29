@@ -17,1806 +17,2664 @@
 # Notes: None.
 
 """
-# Execute this line of logic to process the data
 schwab_schema_catalog.py
 
 """
 
-# Import specific components from a module
+# Explain this line: from __future__ import annotations...
+# Line: from __future__ import annotations
 from __future__ import annotations
 
-# Import the required external module
+# Explain this line: import argparse...
+# Line: import argparse
 import argparse
-# Import the required external module
+# Explain this line: import sys...
+# Line: import sys
 import sys
-# Import specific components from a module
+# Explain this line: from typing import Dict, List, Optional...
+# Line: from typing import Dict, List, Optional
 from typing import Dict, List, Optional
-# Import the required external module
+# Explain this line: import pandas as pd...
+# Line: import pandas as pd
 import pandas as pd
 
 
-# Assign a value or initialize a variable
+# Explain this line: SCHEMA_REGISTRY: List[Dict[str, str]] = ...
+# Line: SCHEMA_REGISTRY: List[Dict[str, str]] = [
 SCHEMA_REGISTRY: List[Dict[str, str]] = [
     # =========================================================================
     # 1. QUOTES ENDPOINT (/quotes)
     # =========================================================================
     # --- quote sub-dictionary (Pricing & Real-Time Liquidity) ---
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "quote",...
+        # Line: "container": "quote",
         "container": "quote",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "bidPrice",...
+        # Line: "field": "bidPrice",
         "field": "bidPrice",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Current highest buying p...
+        # Line: "description": "Current highest buying price",
         "description": "Current highest buying price",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Bid-ask sprea...
+        # Line: "risk_quant_application": "Bid-ask spread modeling
         "risk_quant_application": "Bid-ask spread modeling, execution slippage calculation",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "quote",...
+        # Line: "container": "quote",
         "container": "quote",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "askPrice",...
+        # Line: "field": "askPrice",
         "field": "askPrice",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Current lowest selling p...
+        # Line: "description": "Current lowest selling price",
         "description": "Current lowest selling price",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Liquidity cos...
+        # Line: "risk_quant_application": "Liquidity cost assessme
         "risk_quant_application": "Liquidity cost assessment, arrival price benchmarking",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "quote",...
+        # Line: "container": "quote",
         "container": "quote",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "lastPrice",...
+        # Line: "field": "lastPrice",
         "field": "lastPrice",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Price at which the most ...
+        # Line: "description": "Price at which the most recent tra
         "description": "Price at which the most recent trade cleared",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Mark-to-marke...
+        # Line: "risk_quant_application": "Mark-to-market portfoli
         "risk_quant_application": "Mark-to-market portfolio valuation, intraday PnL",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "quote",...
+        # Line: "container": "quote",
         "container": "quote",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "mark",...
+        # Line: "field": "mark",
         "field": "mark",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Midpoint between bid and...
+        # Line: "description": "Midpoint between bid and ask (or l
         "description": "Midpoint between bid and ask (or last price within spread)",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Illiquid secu...
+        # Line: "risk_quant_application": "Illiquid security fair-
         "risk_quant_application": "Illiquid security fair-value pricing, margin monitoring",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "quote",...
+        # Line: "container": "quote",
         "container": "quote",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "bidSize",...
+        # Line: "field": "bidSize",
         "field": "bidSize",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "int",...
+        # Line: "data_type": "int",
         "data_type": "int",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Number of shares availab...
+        # Line: "description": "Number of shares available at bid
         "description": "Number of shares available at bid (in 100-share lots)",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Market depth ...
+        # Line: "risk_quant_application": "Market depth analysis,
         "risk_quant_application": "Market depth analysis, order book imbalance metrics",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "quote",...
+        # Line: "container": "quote",
         "container": "quote",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "askSize",...
+        # Line: "field": "askSize",
         "field": "askSize",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "int",...
+        # Line: "data_type": "int",
         "data_type": "int",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Number of shares availab...
+        # Line: "description": "Number of shares available at ask
         "description": "Number of shares available at ask (in 100-share lots)",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Immediate liq...
+        # Line: "risk_quant_application": "Immediate liquidity exh
         "risk_quant_application": "Immediate liquidity exhaustion modeling",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "quote",...
+        # Line: "container": "quote",
         "container": "quote",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "totalVolume",...
+        # Line: "field": "totalVolume",
         "field": "totalVolume",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "int",...
+        # Line: "data_type": "int",
         "data_type": "int",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Aggregated share volume ...
+        # Line: "description": "Aggregated share volume across reg
         "description": "Aggregated share volume across regular and extended sessions",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Participation...
+        # Line: "risk_quant_application": "Participation rate algo
         "risk_quant_application": "Participation rate algorithms (VWAP/TWAP), liquidity screens",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "quote",...
+        # Line: "container": "quote",
         "container": "quote",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "openPrice",...
+        # Line: "field": "openPrice",
         "field": "openPrice",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Regular session opening ...
+        # Line: "description": "Regular session opening print",
         "description": "Regular session opening print",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Overnight gap...
+        # Line: "risk_quant_application": "Overnight gap risk calc
         "risk_quant_application": "Overnight gap risk calculation, intraday range expansion",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "quote",...
+        # Line: "container": "quote",
         "container": "quote",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "highPrice",...
+        # Line: "field": "highPrice",
         "field": "highPrice",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Highest traded price in ...
+        # Line: "description": "Highest traded price in current re
         "description": "Highest traded price in current regular session",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Intraday vola...
+        # Line: "risk_quant_application": "Intraday volatility mod
         "risk_quant_application": "Intraday volatility modeling, Garman-Klass volatility",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "quote",...
+        # Line: "container": "quote",
         "container": "quote",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "lowPrice",...
+        # Line: "field": "lowPrice",
         "field": "lowPrice",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Lowest traded price in c...
+        # Line: "description": "Lowest traded price in current reg
         "description": "Lowest traded price in current regular session",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Support breac...
+        # Line: "risk_quant_application": "Support breach detectio
         "risk_quant_application": "Support breach detection, range-based variance estimators",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "quote",...
+        # Line: "container": "quote",
         "container": "quote",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "closePrice",...
+        # Line: "field": "closePrice",
         "field": "closePrice",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Previous trading day off...
+        # Line: "description": "Previous trading day official clos
         "description": "Previous trading day official closing price",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Base price fo...
+        # Line: "risk_quant_application": "Base price for daily re
         "risk_quant_application": "Base price for daily return computation, VaR calculation",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "quote",...
+        # Line: "container": "quote",
         "container": "quote",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "netChange",...
+        # Line: "field": "netChange",
         "field": "netChange",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Absolute price change fr...
+        # Line: "description": "Absolute price change from previou
         "description": "Absolute price change from previous close",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Daily PnL att...
+        # Line: "risk_quant_application": "Daily PnL attribution,
         "risk_quant_application": "Daily PnL attribution, momentum factor rankings",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "quote",...
+        # Line: "container": "quote",
         "container": "quote",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "netPercentChange",...
+        # Line: "field": "netPercentChange",
         "field": "netPercentChange",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Percentage price change ...
+        # Line: "description": "Percentage price change from previ
         "description": "Percentage price change from previous close",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Relative cros...
+        # Line: "risk_quant_application": "Relative cross-asset mo
         "risk_quant_application": "Relative cross-asset momentum ranking, breakout triggers",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "quote",...
+        # Line: "container": "quote",
         "container": "quote",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "52WeekHigh",...
+        # Line: "field": "52WeekHigh",
         "field": "52WeekHigh",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Highest price achieved o...
+        # Line: "description": "Highest price achieved over rollin
         "description": "Highest price achieved over rolling 52-week window",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "52-week high ...
+        # Line: "risk_quant_application": "52-week high momentum f
         "risk_quant_application": "52-week high momentum factor (George & Hwang model)",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "quote",...
+        # Line: "container": "quote",
         "container": "quote",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "52WeekLow",...
+        # Line: "field": "52WeekLow",
         "field": "52WeekLow",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Lowest price achieved ov...
+        # Line: "description": "Lowest price achieved over rolling
         "description": "Lowest price achieved over rolling 52-week window",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Downside tail...
+        # Line: "risk_quant_application": "Downside tail risk, mea
         "risk_quant_application": "Downside tail risk, mean-reversion screening",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "quote",...
+        # Line: "container": "quote",
         "container": "quote",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "securityStatus",...
+        # Line: "field": "securityStatus",
         "field": "securityStatus",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "str",...
+        # Line: "data_type": "str",
         "data_type": "str",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Trading state ('Normal',...
+        # Line: "description": "Trading state ('Normal', 'Halted',
         "description": "Trading state ('Normal', 'Halted', 'Closed')",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Circuit-break...
+        # Line: "risk_quant_application": "Circuit-breaker handlin
         "risk_quant_application": "Circuit-breaker handling, operational kill-switch logic",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "quote",...
+        # Line: "container": "quote",
         "container": "quote",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "bidMICId",...
+        # Line: "field": "bidMICId",
         "field": "bidMICId",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "str",...
+        # Line: "data_type": "str",
         "data_type": "str",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Market Identifier Code (...
+        # Line: "description": "Market Identifier Code (ISO 10383)
         "description": "Market Identifier Code (ISO 10383) for best bid venue",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Smart order r...
+        # Line: "risk_quant_application": "Smart order routing (SO
         "risk_quant_application": "Smart order routing (SOR) analysis, routing fragmentation",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "quote",...
+        # Line: "container": "quote",
         "container": "quote",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "askMICId",...
+        # Line: "field": "askMICId",
         "field": "askMICId",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "str",...
+        # Line: "data_type": "str",
         "data_type": "str",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Market Identifier Code (...
+        # Line: "description": "Market Identifier Code (ISO 10383)
         "description": "Market Identifier Code (ISO 10383) for best ask venue",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Exchange fee ...
+        # Line: "risk_quant_application": "Exchange fee optimizati
         "risk_quant_application": "Exchange fee optimization, maker-taker rebate capture",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "quote",...
+        # Line: "container": "quote",
         "container": "quote",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "quoteTime",...
+        # Line: "field": "quoteTime",
         "field": "quoteTime",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "int",...
+        # Line: "data_type": "int",
         "data_type": "int",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Epoch timestamp in milli...
+        # Line: "description": "Epoch timestamp in milliseconds of
         "description": "Epoch timestamp in milliseconds of latest quote update",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Quote stalene...
+        # Line: "risk_quant_application": "Quote staleness checks,
         "risk_quant_application": "Quote staleness checks, data latency SLA monitoring",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
     # --- fundamental sub-dictionary (Accounting, Valuation & Risk Factors) ---
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "fundamental",...
+        # Line: "container": "fundamental",
         "container": "fundamental",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "peRatio",...
+        # Line: "field": "peRatio",
         "field": "peRatio",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Trailing Price-to-Earnin...
+        # Line: "description": "Trailing Price-to-Earnings ratio",
         "description": "Trailing Price-to-Earnings ratio",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Value factor ...
+        # Line: "risk_quant_application": "Value factor equity scr
         "risk_quant_application": "Value factor equity screening, style-box allocation",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "fundamental",...
+        # Line: "container": "fundamental",
         "container": "fundamental",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "pegRatio",...
+        # Line: "field": "pegRatio",
         "field": "pegRatio",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Price/Earnings-to-Growth...
+        # Line: "description": "Price/Earnings-to-Growth ratio",
         "description": "Price/Earnings-to-Growth ratio",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "GARP (Growth ...
+        # Line: "risk_quant_application": "GARP (Growth At Reasona
         "risk_quant_application": "GARP (Growth At Reasonable Price) quantitative strategy",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "fundamental",...
+        # Line: "container": "fundamental",
         "container": "fundamental",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "pbRatio",...
+        # Line: "field": "pbRatio",
         "field": "pbRatio",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Price-to-Book value rati...
+        # Line: "description": "Price-to-Book value ratio",
         "description": "Price-to-Book value ratio",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Fama-French H...
+        # Line: "risk_quant_application": "Fama-French HML (High M
         "risk_quant_application": "Fama-French HML (High Minus Low) factor modeling",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "fundamental",...
+        # Line: "container": "fundamental",
         "container": "fundamental",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "prRatio",...
+        # Line: "field": "prRatio",
         "field": "prRatio",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Price-to-Revenue (Sales)...
+        # Line: "description": "Price-to-Revenue (Sales) ratio",
         "description": "Price-to-Revenue (Sales) ratio",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Unprofitable ...
+        # Line: "risk_quant_application": "Unprofitable growth com
         "risk_quant_application": "Unprofitable growth company relative valuation",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "fundamental",...
+        # Line: "container": "fundamental",
         "container": "fundamental",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "pcfRatio",...
+        # Line: "field": "pcfRatio",
         "field": "pcfRatio",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Price-to-Cash-Flow ratio...
+        # Line: "description": "Price-to-Cash-Flow ratio",
         "description": "Price-to-Cash-Flow ratio",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Cash earnings...
+        # Line: "risk_quant_application": "Cash earnings quality s
         "risk_quant_application": "Cash earnings quality screen, insolvency defense",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "fundamental",...
+        # Line: "container": "fundamental",
         "container": "fundamental",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "beta",...
+        # Line: "field": "beta",
         "field": "beta",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Systematic market risk c...
+        # Line: "description": "Systematic market risk coefficient
         "description": "Systematic market risk coefficient against S&P 500",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "CAPM market s...
+        # Line: "risk_quant_application": "CAPM market sensitivity
         "risk_quant_application": "CAPM market sensitivity, portfolio beta-hedging weights",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "fundamental",...
+        # Line: "container": "fundamental",
         "container": "fundamental",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "eps",...
+        # Line: "field": "eps",
         "field": "eps",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Diluted earnings per sha...
+        # Line: "description": "Diluted earnings per share (TTM)",
         "description": "Diluted earnings per share (TTM)",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Earnings surp...
+        # Line: "risk_quant_application": "Earnings surprises, fun
         "risk_quant_application": "Earnings surprises, fundamental factor indexing",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "fundamental",...
+        # Line: "container": "fundamental",
         "container": "fundamental",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "divYield",...
+        # Line: "field": "divYield",
         "field": "divYield",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Annualized dividend yiel...
+        # Line: "description": "Annualized dividend yield percenta
         "description": "Annualized dividend yield percentage",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Carry trade s...
+        # Line: "risk_quant_application": "Carry trade strategies,
         "risk_quant_application": "Carry trade strategies, dividend discount modeling",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "fundamental",...
+        # Line: "container": "fundamental",
         "container": "fundamental",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "divAmount",...
+        # Line: "field": "divAmount",
         "field": "divAmount",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Dividend payout amount p...
+        # Line: "description": "Dividend payout amount per share",
         "description": "Dividend payout amount per share",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Cash flow mat...
+        # Line: "risk_quant_application": "Cash flow matching, ex-
         "risk_quant_application": "Cash flow matching, ex-dividend price drop adjustments",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "fundamental",...
+        # Line: "container": "fundamental",
         "container": "fundamental",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "divFreq",...
+        # Line: "field": "divFreq",
         "field": "divFreq",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "int",...
+        # Line: "data_type": "int",
         "data_type": "int",
-        # Assign a value or initialize a variable
+        # Explain this line: "description": "Dividend distribution fr...
+        # Line: "description": "Dividend distribution frequency (1
         "description": "Dividend distribution frequency (1=Ann, 2=Semi, 4=Qtr, 12=Mth)",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Cash flow sch...
+        # Line: "risk_quant_application": "Cash flow scheduling, e
         "risk_quant_application": "Cash flow scheduling, early option assignment risk",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "fundamental",...
+        # Line: "container": "fundamental",
         "container": "fundamental",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "divDate",...
+        # Line: "field": "divDate",
         "field": "divDate",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "str",...
+        # Line: "data_type": "str",
         "data_type": "str",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Ex-dividend date (YYYY-M...
+        # Line: "description": "Ex-dividend date (YYYY-MM-DD)",
         "description": "Ex-dividend date (YYYY-MM-DD)",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "American call...
+        # Line: "risk_quant_application": "American call option ea
         "risk_quant_application": "American call option early assignment arbitrage modeling",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "fundamental",...
+        # Line: "container": "fundamental",
         "container": "fundamental",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "grossMarginTTM",...
+        # Line: "field": "grossMarginTTM",
         "field": "grossMarginTTM",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Gross profit margin perc...
+        # Line: "description": "Gross profit margin percentage ove
         "description": "Gross profit margin percentage over trailing twelve months",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Quality facto...
+        # Line: "risk_quant_application": "Quality factor scoring
         "risk_quant_application": "Quality factor scoring (Novy-Marx gross profitability)",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "fundamental",...
+        # Line: "container": "fundamental",
         "container": "fundamental",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "netProfitMarginTTM",...
+        # Line: "field": "netProfitMarginTTM",
         "field": "netProfitMarginTTM",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Net profit margin percen...
+        # Line: "description": "Net profit margin percentage (TTM)
         "description": "Net profit margin percentage (TTM)",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Operating lev...
+        # Line: "risk_quant_application": "Operating leverage anal
         "risk_quant_application": "Operating leverage analysis, margin compression detection",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "fundamental",...
+        # Line: "container": "fundamental",
         "container": "fundamental",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "returnOnEquity",...
+        # Line: "field": "returnOnEquity",
         "field": "returnOnEquity",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Return on common equity ...
+        # Line: "description": "Return on common equity (ROE)",
         "description": "Return on common equity (ROE)",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "DuPont framew...
+        # Line: "risk_quant_application": "DuPont framework decomp
         "risk_quant_application": "DuPont framework decomposition, management efficiency",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "fundamental",...
+        # Line: "container": "fundamental",
         "container": "fundamental",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "returnOnAssets",...
+        # Line: "field": "returnOnAssets",
         "field": "returnOnAssets",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Return on total assets (...
+        # Line: "description": "Return on total assets (ROA)",
         "description": "Return on total assets (ROA)",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Capital alloc...
+        # Line: "risk_quant_application": "Capital allocation effi
         "risk_quant_application": "Capital allocation efficiency, asset-heavy sector screens",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "fundamental",...
+        # Line: "container": "fundamental",
         "container": "fundamental",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "quickRatio",...
+        # Line: "field": "quickRatio",
         "field": "quickRatio",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Acid-test liquidity rati...
+        # Line: "description": "Acid-test liquidity ratio ((Cash +
         "description": "Acid-test liquidity ratio ((Cash + Receivables) / Current Liab)",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Short-term cr...
+        # Line: "risk_quant_application": "Short-term credit risk,
         "risk_quant_application": "Short-term credit risk, debt-distress screens",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "fundamental",...
+        # Line: "container": "fundamental",
         "container": "fundamental",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "currentRatio",...
+        # Line: "field": "currentRatio",
         "field": "currentRatio",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Current Assets divided b...
+        # Line: "description": "Current Assets divided by Current
         "description": "Current Assets divided by Current Liabilities",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Working capit...
+        # Line: "risk_quant_application": "Working capital buffer,
         "risk_quant_application": "Working capital buffer, working capital stress testing",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "fundamental",...
+        # Line: "container": "fundamental",
         "container": "fundamental",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "totalDebtToEquity",...
+        # Line: "field": "totalDebtToEquity",
         "field": "totalDebtToEquity",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Total debt liabilities d...
+        # Line: "description": "Total debt liabilities divided by
         "description": "Total debt liabilities divided by total shareholders equity",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Financial lev...
+        # Line: "risk_quant_application": "Financial leverage risk
         "risk_quant_application": "Financial leverage risk, interest rate vulnerability",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "fundamental",...
+        # Line: "container": "fundamental",
         "container": "fundamental",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "marketCap",...
+        # Line: "field": "marketCap",
         "field": "marketCap",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Total market capitalizat...
+        # Line: "description": "Total market capitalization in mil
         "description": "Total market capitalization in millions",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Size factor (...
+        # Line: "risk_quant_application": "Size factor (SMB), inst
         "risk_quant_application": "Size factor (SMB), institutional liquidity tier weighting",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "fundamental",...
+        # Line: "container": "fundamental",
         "container": "fundamental",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "sharesOutstanding",...
+        # Line: "field": "sharesOutstanding",
         "field": "sharesOutstanding",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Total shares issued and ...
+        # Line: "description": "Total shares issued and outstandin
         "description": "Total shares issued and outstanding",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Index weight ...
+        # Line: "risk_quant_application": "Index weight rebalancin
         "risk_quant_application": "Index weight rebalancing, dilution / buyback yield tracking",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "fundamental",...
+        # Line: "container": "fundamental",
         "container": "fundamental",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "vol10DayAvg",...
+        # Line: "field": "vol10DayAvg",
         "field": "vol10DayAvg",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "10-day rolling average t...
+        # Line: "description": "10-day rolling average trading vol
         "description": "10-day rolling average trading volume",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Short-term vo...
+        # Line: "risk_quant_application": "Short-term volume spike
         "risk_quant_application": "Short-term volume spike anomaly detection",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "fundamental",...
+        # Line: "container": "fundamental",
         "container": "fundamental",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "vol3MonthAvg",...
+        # Line: "field": "vol3MonthAvg",
         "field": "vol3MonthAvg",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "90-day baseline average ...
+        # Line: "description": "90-day baseline average trading vo
         "description": "90-day baseline average trading volume",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Baseline inst...
+        # Line: "risk_quant_application": "Baseline institutional
         "risk_quant_application": "Baseline institutional capacity / position size limits",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
     # --- reference sub-dictionary (Asset Master & Borrow Risk) ---
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "reference",...
+        # Line: "container": "reference",
         "container": "reference",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "cusip",...
+        # Line: "field": "cusip",
         "field": "cusip",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "str",...
+        # Line: "data_type": "str",
         "data_type": "str",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "9-digit Committee on Uni...
+        # Line: "description": "9-digit Committee on Uniform Secur
         "description": "9-digit Committee on Uniform Securities Identification Procedures",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Security mast...
+        # Line: "risk_quant_application": "Security master dedupli
         "risk_quant_application": "Security master deduplication, corporate action linking",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "reference",...
+        # Line: "container": "reference",
         "container": "reference",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "exchangeName",...
+        # Line: "field": "exchangeName",
         "field": "exchangeName",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "str",...
+        # Line: "data_type": "str",
         "data_type": "str",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Primary listing exchange...
+        # Line: "description": "Primary listing exchange name (e.g
         "description": "Primary listing exchange name (e.g., 'NASDAQ', 'NYSE')",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Opening/closi...
+        # Line: "risk_quant_application": "Opening/closing auction
         "risk_quant_application": "Opening/closing auction routing, regulatory halt source",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "reference",...
+        # Line: "container": "reference",
         "container": "reference",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "isShortable",...
+        # Line: "field": "isShortable",
         "field": "isShortable",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "bool",...
+        # Line: "data_type": "bool",
         "data_type": "bool",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Brokerage flag indicatin...
+        # Line: "description": "Brokerage flag indicating if secur
         "description": "Brokerage flag indicating if security can be shorted",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Long/short eq...
+        # Line: "risk_quant_application": "Long/short equity execu
         "risk_quant_application": "Long/short equity execution feasibility gate",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "reference",...
+        # Line: "container": "reference",
         "container": "reference",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "isHardToBorrow",...
+        # Line: "field": "isHardToBorrow",
         "field": "isHardToBorrow",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "bool",...
+        # Line: "data_type": "bool",
         "data_type": "bool",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Flag indicating elevated...
+        # Line: "description": "Flag indicating elevated borrow fr
         "description": "Flag indicating elevated borrow friction or locate deficits",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Short-squeeze...
+        # Line: "risk_quant_application": "Short-squeeze risk indi
         "risk_quant_application": "Short-squeeze risk indicator, special-rate locate tracking",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "reference",...
+        # Line: "container": "reference",
         "container": "reference",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "htbRate",...
+        # Line: "field": "htbRate",
         "field": "htbRate",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Hard-to-borrow annualize...
+        # Line: "description": "Hard-to-borrow annualized borrow f
         "description": "Hard-to-borrow annualized borrow fee rate percentage",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Negative carr...
+        # Line: "risk_quant_application": "Negative carry cost in
         "risk_quant_application": "Negative carry cost in short portfolios, conversion arbitrage",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "reference",...
+        # Line: "container": "reference",
         "container": "reference",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "htbQuantity",...
+        # Line: "field": "htbQuantity",
         "field": "htbQuantity",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "int",...
+        # Line: "data_type": "int",
         "data_type": "int",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Available locate shares ...
+        # Line: "description": "Available locate shares currently
         "description": "Available locate shares currently open in inventory",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Short capacit...
+        # Line: "risk_quant_application": "Short capacity constrai
         "risk_quant_application": "Short capacity constraint checking, borrow depth sizing",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
     # --- regular & extended sub-dictionaries (Session Isolation) ---
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "regular",...
+        # Line: "container": "regular",
         "container": "regular",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "regularMarketLastPrice",...
+        # Line: "field": "regularMarketLastPrice",
         "field": "regularMarketLastPrice",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Last print recorded excl...
+        # Line: "description": "Last print recorded exclusively du
         "description": "Last print recorded exclusively during standard session",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Official cash...
+        # Line: "risk_quant_application": "Official cash market be
         "risk_quant_application": "Official cash market benchmark, eliminating off-hour prints",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "regular",...
+        # Line: "container": "regular",
         "container": "regular",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "regularMarketPercentChange",...
+        # Line: "field": "regularMarketPercentChange",
         "field": "regularMarketPercentChange",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Regular session percenta...
+        # Line: "description": "Regular session percentage change"
         "description": "Regular session percentage change",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Index trackin...
+        # Line: "risk_quant_application": "Index tracking variance
         "risk_quant_application": "Index tracking variance calculation",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Quotes",...
+        # Line: "endpoint": "Quotes",
         "endpoint": "Quotes",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "extended",...
+        # Line: "container": "extended",
         "container": "extended",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "extendedMarketLastPrice",...
+        # Line: "field": "extendedMarketLastPrice",
         "field": "extendedMarketLastPrice",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Latest trade print in pr...
+        # Line: "description": "Latest trade print in pre-market o
         "description": "Latest trade print in pre-market or after-hours session",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Earnings rele...
+        # Line: "risk_quant_application": "Earnings release gap es
         "risk_quant_application": "Earnings release gap estimation, overnight risk exposure",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
     # =========================================================================
     # 2. PRICE HISTORY ENDPOINT (/pricehistory)
     # =========================================================================
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "PriceHistory",...
+        # Line: "endpoint": "PriceHistory",
         "endpoint": "PriceHistory",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "root",...
+        # Line: "container": "root",
         "container": "root",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "symbol",...
+        # Line: "field": "symbol",
         "field": "symbol",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "str",...
+        # Line: "data_type": "str",
         "data_type": "str",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Queried instrument ticke...
+        # Line: "description": "Queried instrument ticker symbol",
         "description": "Queried instrument ticker symbol",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Timeseries jo...
+        # Line: "risk_quant_application": "Timeseries join validat
         "risk_quant_application": "Timeseries join validation, universe indexing",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "PriceHistory",...
+        # Line: "endpoint": "PriceHistory",
         "endpoint": "PriceHistory",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "root",...
+        # Line: "container": "root",
         "container": "root",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "empty",...
+        # Line: "field": "empty",
         "field": "empty",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "bool",...
+        # Line: "data_type": "bool",
         "data_type": "bool",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Flag indicating whether ...
+        # Line: "description": "Flag indicating whether no histori
         "description": "Flag indicating whether no historical bars were returned",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Defensive exc...
+        # Line: "risk_quant_application": "Defensive exception bra
         "risk_quant_application": "Defensive exception branching, halts/new listing detection",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "PriceHistory",...
+        # Line: "endpoint": "PriceHistory",
         "endpoint": "PriceHistory",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "root",...
+        # Line: "container": "root",
         "container": "root",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "previousClose",...
+        # Line: "field": "previousClose",
         "field": "previousClose",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Reference previous tradi...
+        # Line: "description": "Reference previous trading session
         "description": "Reference previous trading session close",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "First-candle ...
+        # Line: "risk_quant_application": "First-candle return cha
         "risk_quant_application": "First-candle return chaining, baseline shift calibration",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "PriceHistory",...
+        # Line: "endpoint": "PriceHistory",
         "endpoint": "PriceHistory",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "candles",...
+        # Line: "container": "candles",
         "container": "candles",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "datetime",...
+        # Line: "field": "datetime",
         "field": "datetime",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "int (epoch ms)",...
+        # Line: "data_type": "int (epoch ms)",
         "data_type": "int (epoch ms)",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Candle open timestamp in...
+        # Line: "description": "Candle open timestamp in milliseco
         "description": "Candle open timestamp in milliseconds since Epoch UTC",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Temporal alig...
+        # Line: "risk_quant_application": "Temporal alignment, res
         "risk_quant_application": "Temporal alignment, resampling, cross-sectional panel builds",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "PriceHistory",...
+        # Line: "endpoint": "PriceHistory",
         "endpoint": "PriceHistory",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "candles",...
+        # Line: "container": "candles",
         "container": "candles",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "open",...
+        # Line: "field": "open",
         "field": "open",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "First executed trade pri...
+        # Line: "description": "First executed trade price within
         "description": "First executed trade price within the bar window",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Bar-by-bar re...
+        # Line: "risk_quant_application": "Bar-by-bar return calcu
         "risk_quant_application": "Bar-by-bar return calculation, opening range breakout strategies",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "PriceHistory",...
+        # Line: "endpoint": "PriceHistory",
         "endpoint": "PriceHistory",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "candles",...
+        # Line: "container": "candles",
         "container": "candles",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "high",...
+        # Line: "field": "high",
         "field": "high",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Peak trade print execute...
+        # Line: "description": "Peak trade print executed within t
         "description": "Peak trade print executed within the bar window",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Parkinson vol...
+        # Line: "risk_quant_application": "Parkinson volatility, A
         "risk_quant_application": "Parkinson volatility, ATR (Average True Range), stop-loss checks",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "PriceHistory",...
+        # Line: "endpoint": "PriceHistory",
         "endpoint": "PriceHistory",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "candles",...
+        # Line: "container": "candles",
         "container": "candles",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "low",...
+        # Line: "field": "low",
         "field": "low",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Trough trade print execu...
+        # Line: "description": "Trough trade print executed within
         "description": "Trough trade print executed within the bar window",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Maximum drawd...
+        # Line: "risk_quant_application": "Maximum drawdown, intra
         "risk_quant_application": "Maximum drawdown, intraday price variance bounds",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "PriceHistory",...
+        # Line: "endpoint": "PriceHistory",
         "endpoint": "PriceHistory",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "candles",...
+        # Line: "container": "candles",
         "container": "candles",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "close",...
+        # Line: "field": "close",
         "field": "close",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Final trade print execut...
+        # Line: "description": "Final trade print executed within
         "description": "Final trade print executed within the bar window",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Continuous re...
+        # Line: "risk_quant_application": "Continuous returns seri
         "risk_quant_application": "Continuous returns series, covariance matrix calibration",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "PriceHistory",...
+        # Line: "endpoint": "PriceHistory",
         "endpoint": "PriceHistory",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "candles",...
+        # Line: "container": "candles",
         "container": "candles",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "volume",...
+        # Line: "field": "volume",
         "field": "volume",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "int",...
+        # Line: "data_type": "int",
         "data_type": "int",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Total share units transa...
+        # Line: "description": "Total share units transacted durin
         "description": "Total share units transacted during candle interval",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Volume profil...
+        # Line: "risk_quant_application": "Volume profile, institu
         "risk_quant_application": "Volume profile, institutional accumulation/distribution",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
     # =========================================================================
     # 3. OPTION CHAINS ENDPOINT (/chains)
     # =========================================================================
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "OptionChains",...
+        # Line: "endpoint": "OptionChains",
         "endpoint": "OptionChains",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "root",...
+        # Line: "container": "root",
         "container": "root",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "underlyingPrice",...
+        # Line: "field": "underlyingPrice",
         "field": "underlyingPrice",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Live spot price of the u...
+        # Line: "description": "Live spot price of the underlying
         "description": "Live spot price of the underlying equity/ETF",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Moneyness ben...
+        # Line: "risk_quant_application": "Moneyness benchmark (S/
         "risk_quant_application": "Moneyness benchmark (S/K), Black-Scholes spot input",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "OptionChains",...
+        # Line: "endpoint": "OptionChains",
         "endpoint": "OptionChains",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "root",...
+        # Line: "container": "root",
         "container": "root",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "volatility",...
+        # Line: "field": "volatility",
         "field": "volatility",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Aggregated 30-day implie...
+        # Line: "description": "Aggregated 30-day implied volatili
         "description": "Aggregated 30-day implied volatility across option chain",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "VIX-style ind...
+        # Line: "risk_quant_application": "VIX-style index replica
         "risk_quant_application": "VIX-style index replication, macro market fear indicator",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "OptionChains",...
+        # Line: "endpoint": "OptionChains",
         "endpoint": "OptionChains",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "root",...
+        # Line: "container": "root",
         "container": "root",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "interestRate",...
+        # Line: "field": "interestRate",
         "field": "interestRate",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Risk-free rate assumed i...
+        # Line: "description": "Risk-free rate assumed in pricing
         "description": "Risk-free rate assumed in pricing models",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Drift paramet...
+        # Line: "risk_quant_application": "Drift parameter in opti
         "risk_quant_application": "Drift parameter in option pricing, cost-of-carry calibration",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "OptionChains",...
+        # Line: "endpoint": "OptionChains",
         "endpoint": "OptionChains",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "OptionContract",...
+        # Line: "container": "OptionContract",
         "container": "OptionContract",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "putCallIndicator",...
+        # Line: "field": "putCallIndicator",
         "field": "putCallIndicator",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "str",...
+        # Line: "data_type": "str",
         "data_type": "str",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Contract derivative righ...
+        # Line: "description": "Contract derivative right ('CALL'
         "description": "Contract derivative right ('CALL' or 'PUT')",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Put/Call rati...
+        # Line: "risk_quant_application": "Put/Call ratio calculat
         "risk_quant_application": "Put/Call ratio calculation, skew decomposition",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "OptionChains",...
+        # Line: "endpoint": "OptionChains",
         "endpoint": "OptionChains",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "OptionContract",...
+        # Line: "container": "OptionContract",
         "container": "OptionContract",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "strikePrice",...
+        # Line: "field": "strikePrice",
         "field": "strikePrice",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Exercise strike price",...
+        # Line: "description": "Exercise strike price",
         "description": "Exercise strike price",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Strike axis o...
+        # Line: "risk_quant_application": "Strike axis on volatili
         "risk_quant_application": "Strike axis on volatility smile/surface, delta pinning",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "OptionChains",...
+        # Line: "endpoint": "OptionChains",
         "endpoint": "OptionChains",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "OptionContract",...
+        # Line: "container": "OptionContract",
         "container": "OptionContract",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "daysToExpiration",...
+        # Line: "field": "daysToExpiration",
         "field": "daysToExpiration",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "int",...
+        # Line: "data_type": "int",
         "data_type": "int",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Calendar days remaining ...
+        # Line: "description": "Calendar days remaining until cont
         "description": "Calendar days remaining until contract expiration (DTE)",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Term-structur...
+        # Line: "risk_quant_application": "Term-structure time-dec
         "risk_quant_application": "Term-structure time-decay axis (tau), calendar spread pricing",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "OptionChains",...
+        # Line: "endpoint": "OptionChains",
         "endpoint": "OptionChains",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "OptionContract",...
+        # Line: "container": "OptionContract",
         "container": "OptionContract",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "bid / ask / mark",...
+        # Line: "field": "bid / ask / mark",
         "field": "bid / ask / mark",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Derivative contract mark...
+        # Line: "description": "Derivative contract market bid, as
         "description": "Derivative contract market bid, ask, and synthetic midpoint",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Derivative ex...
+        # Line: "risk_quant_application": "Derivative execution co
         "risk_quant_application": "Derivative execution cost, structured product valuations",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "OptionChains",...
+        # Line: "endpoint": "OptionChains",
         "endpoint": "OptionChains",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "OptionContract",...
+        # Line: "container": "OptionContract",
         "container": "OptionContract",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "totalVolume",...
+        # Line: "field": "totalVolume",
         "field": "totalVolume",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "int",...
+        # Line: "data_type": "int",
         "data_type": "int",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Aggregated contracts tra...
+        # Line: "description": "Aggregated contracts traded during
         "description": "Aggregated contracts traded during current session",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Unusual optio...
+        # Line: "risk_quant_application": "Unusual options activit
         "risk_quant_application": "Unusual options activity detection, institutional sweep alerts",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "OptionChains",...
+        # Line: "endpoint": "OptionChains",
         "endpoint": "OptionChains",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "OptionContract",...
+        # Line: "container": "OptionContract",
         "container": "OptionContract",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "openInterest",...
+        # Line: "field": "openInterest",
         "field": "openInterest",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "int",...
+        # Line: "data_type": "int",
         "data_type": "int",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Total outstanding unsett...
+        # Line: "description": "Total outstanding unsettled contra
         "description": "Total outstanding unsettled contracts",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Gamma exposur...
+        # Line: "risk_quant_application": "Gamma exposure (GEX) ma
         "risk_quant_application": "Gamma exposure (GEX) market maker positioning models",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "OptionChains",...
+        # Line: "endpoint": "OptionChains",
         "endpoint": "OptionChains",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "OptionContract",...
+        # Line: "container": "OptionContract",
         "container": "OptionContract",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "volatility",...
+        # Line: "field": "volatility",
         "field": "volatility",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Black-Scholes Implied Vo...
+        # Line: "description": "Black-Scholes Implied Volatility (
         "description": "Black-Scholes Implied Volatility (IV) percentage",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "IV rank, IV p...
+        # Line: "risk_quant_application": "IV rank, IV percentile,
         "risk_quant_application": "IV rank, IV percentile, SABR / SVI volatility surface fitting",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "OptionChains",...
+        # Line: "endpoint": "OptionChains",
         "endpoint": "OptionChains",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "OptionContract",...
+        # Line: "container": "OptionContract",
         "container": "OptionContract",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "delta",...
+        # Line: "field": "delta",
         "field": "delta",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "First-order price sensit...
+        # Line: "description": "First-order price sensitivity (dV
         "description": "First-order price sensitivity (dV / dS)",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Hedge ratio c...
+        # Line: "risk_quant_application": "Hedge ratio calculation
         "risk_quant_application": "Hedge ratio calculation, delta-neutral rebalancing, probability ITM",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "OptionChains",...
+        # Line: "endpoint": "OptionChains",
         "endpoint": "OptionChains",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "OptionContract",...
+        # Line: "container": "OptionContract",
         "container": "OptionContract",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "gamma",...
+        # Line: "field": "gamma",
         "field": "gamma",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Second-order price sensi...
+        # Line: "description": "Second-order price sensitivity (d^
         "description": "Second-order price sensitivity (d^2V / dS^2)",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Gamma squeeze...
+        # Line: "risk_quant_application": "Gamma squeeze modeling,
         "risk_quant_application": "Gamma squeeze modeling, market maker hedging acceleration",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "OptionChains",...
+        # Line: "endpoint": "OptionChains",
         "endpoint": "OptionChains",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "OptionContract",...
+        # Line: "container": "OptionContract",
         "container": "OptionContract",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "theta",...
+        # Line: "field": "theta",
         "field": "theta",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Time decay sensitivity (...
+        # Line: "description": "Time decay sensitivity (dV / dt) i
         "description": "Time decay sensitivity (dV / dt) in points per day",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Net portfolio...
+        # Line: "risk_quant_application": "Net portfolio theta har
         "risk_quant_application": "Net portfolio theta harvesting, premium decay optimization",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "OptionChains",...
+        # Line: "endpoint": "OptionChains",
         "endpoint": "OptionChains",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "OptionContract",...
+        # Line: "container": "OptionContract",
         "container": "OptionContract",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "vega",...
+        # Line: "field": "vega",
         "field": "vega",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Implied volatility sensi...
+        # Line: "description": "Implied volatility sensitivity (dV
         "description": "Implied volatility sensitivity (dV / dsigma)",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Vol-spike ris...
+        # Line: "risk_quant_application": "Vol-spike risk hedging,
         "risk_quant_application": "Vol-spike risk hedging, vega-weighted risk management",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "OptionChains",...
+        # Line: "endpoint": "OptionChains",
         "endpoint": "OptionChains",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "OptionContract",...
+        # Line: "container": "OptionContract",
         "container": "OptionContract",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "rho",...
+        # Line: "field": "rho",
         "field": "rho",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Interest rate sensitivit...
+        # Line: "description": "Interest rate sensitivity (dV / dr
         "description": "Interest rate sensitivity (dV / dr)",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Long-dated LE...
+        # Line: "risk_quant_application": "Long-dated LEAPS intere
         "risk_quant_application": "Long-dated LEAPS interest rate duration management",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "OptionChains",...
+        # Line: "endpoint": "OptionChains",
         "endpoint": "OptionChains",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "OptionContract",...
+        # Line: "container": "OptionContract",
         "container": "OptionContract",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "inTheMoney",...
+        # Line: "field": "inTheMoney",
         "field": "inTheMoney",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "bool",...
+        # Line: "data_type": "bool",
         "data_type": "bool",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Flag indicating if strik...
+        # Line: "description": "Flag indicating if strike has intr
         "description": "Flag indicating if strike has intrinsic value",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Assignment ri...
+        # Line: "risk_quant_application": "Assignment risk trackin
         "risk_quant_application": "Assignment risk tracking, physical deliverable exposure",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "OptionChains",...
+        # Line: "endpoint": "OptionChains",
         "endpoint": "OptionChains",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "OptionContract",...
+        # Line: "container": "OptionContract",
         "container": "OptionContract",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "theoreticalOptionValue",...
+        # Line: "field": "theoreticalOptionValue",
         "field": "theoreticalOptionValue",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Pricing model output fai...
+        # Line: "description": "Pricing model output fair value",
         "description": "Pricing model output fair value",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Relative misp...
+        # Line: "risk_quant_application": "Relative mispricing dis
         "risk_quant_application": "Relative mispricing discovery, statistical arbitrage",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
     # =========================================================================
     # 4. OPTION EXPIRATIONS ENDPOINT (/expirationchain)
     # =========================================================================
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "OptionExpirations",...
+        # Line: "endpoint": "OptionExpirations",
         "endpoint": "OptionExpirations",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "expirationList",...
+        # Line: "container": "expirationList",
         "container": "expirationList",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "expirationDate",...
+        # Line: "field": "expirationDate",
         "field": "expirationDate",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "str (YYYY-MM-DD)",...
+        # Line: "data_type": "str (YYYY-MM-DD)",
         "data_type": "str (YYYY-MM-DD)",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Active contract settleme...
+        # Line: "description": "Active contract settlement expirat
         "description": "Active contract settlement expiration date",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Expiration ca...
+        # Line: "risk_quant_application": "Expiration calendar sch
         "risk_quant_application": "Expiration calendar scheduling, roll-schedule management",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "OptionExpirations",...
+        # Line: "endpoint": "OptionExpirations",
         "endpoint": "OptionExpirations",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "expirationList",...
+        # Line: "container": "expirationList",
         "container": "expirationList",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "daysToExpiration",...
+        # Line: "field": "daysToExpiration",
         "field": "daysToExpiration",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "int",...
+        # Line: "data_type": "int",
         "data_type": "int",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Calendar days remaining ...
+        # Line: "description": "Calendar days remaining until expi
         "description": "Calendar days remaining until expiration",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Filtering tar...
+        # Line: "risk_quant_application": "Filtering target DTE te
         "risk_quant_application": "Filtering target DTE tenors (e.g. 0-DTE, 30-DTE, 45-DTE)",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "OptionExpirations",...
+        # Line: "endpoint": "OptionExpirations",
         "endpoint": "OptionExpirations",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "expirationList",...
+        # Line: "container": "expirationList",
         "container": "expirationList",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "expirationType",...
+        # Line: "field": "expirationType",
         "field": "expirationType",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "str",...
+        # Line: "data_type": "str",
         "data_type": "str",
-        # Assign a value or initialize a variable
+        # Explain this line: "description": "Cycle frequency ('S'=Sta...
+        # Line: "description": "Cycle frequency ('S'=Standard, 'W'
         "description": "Cycle frequency ('S'=Standard, 'W'=Weekly, 'Q'=Quarterly)",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Liquidity con...
+        # Line: "risk_quant_application": "Liquidity concentration
         "risk_quant_application": "Liquidity concentration analysis (monthly vs. weekly cycles)",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "OptionExpirations",...
+        # Line: "endpoint": "OptionExpirations",
         "endpoint": "OptionExpirations",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "expirationList",...
+        # Line: "container": "expirationList",
         "container": "expirationList",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "settlementType",...
+        # Line: "field": "settlementType",
         "field": "settlementType",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "str",...
+        # Line: "data_type": "str",
         "data_type": "str",
-        # Assign a value or initialize a variable
+        # Explain this line: "description": "Settlement timing ('A'=A...
+        # Line: "description": "Settlement timing ('A'=AM settled,
         "description": "Settlement timing ('A'=AM settled, 'P'=PM settled)",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Overnight cas...
+        # Line: "risk_quant_application": "Overnight cash settleme
         "risk_quant_application": "Overnight cash settlement risk vs. end-of-day market print",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
     # =========================================================================
     # 5. INSTRUMENTS ENDPOINT (/instruments)
     # =========================================================================
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Instruments",...
+        # Line: "endpoint": "Instruments",
         "endpoint": "Instruments",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "instruments",...
+        # Line: "container": "instruments",
         "container": "instruments",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "cusip",...
+        # Line: "field": "cusip",
         "field": "cusip",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "str",...
+        # Line: "data_type": "str",
         "data_type": "str",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Official 9-character CUS...
+        # Line: "description": "Official 9-character CUSIP identif
         "description": "Official 9-character CUSIP identifier",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Cross-platfor...
+        # Line: "risk_quant_application": "Cross-platform reconcil
         "risk_quant_application": "Cross-platform reconciliation, symbology cross-walks",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Instruments",...
+        # Line: "endpoint": "Instruments",
         "endpoint": "Instruments",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "instruments",...
+        # Line: "container": "instruments",
         "container": "instruments",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "assetType",...
+        # Line: "field": "assetType",
         "field": "assetType",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "str",...
+        # Line: "data_type": "str",
         "data_type": "str",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Asset class ('EQUITY', '...
+        # Line: "description": "Asset class ('EQUITY', 'ETF', 'BON
         "description": "Asset class ('EQUITY', 'ETF', 'BOND', 'MUTUAL_FUND')",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Asset-allocat...
+        # Line: "risk_quant_application": "Asset-allocation constr
         "risk_quant_application": "Asset-allocation constraint verification, mandate compliance",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Instruments",...
+        # Line: "endpoint": "Instruments",
         "endpoint": "Instruments",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "instruments",...
+        # Line: "container": "instruments",
         "container": "instruments",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "description",...
+        # Line: "field": "description",
         "field": "description",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "str",...
+        # Line: "data_type": "str",
         "data_type": "str",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Official legal name of t...
+        # Line: "description": "Official legal name of the entity
         "description": "Official legal name of the entity or fund",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Security mast...
+        # Line: "risk_quant_application": "Security master entity
         "risk_quant_application": "Security master entity resolution, textual categorization",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Instruments",...
+        # Line: "endpoint": "Instruments",
         "endpoint": "Instruments",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "fundamental",...
+        # Line: "container": "fundamental",
         "container": "fundamental",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "sharesFloat",...
+        # Line: "field": "sharesFloat",
         "field": "sharesFloat",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Total shares floating fr...
+        # Line: "description": "Total shares floating freely in pu
         "description": "Total shares floating freely in public market",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Short interes...
+        # Line: "risk_quant_application": "Short interest % of flo
         "risk_quant_application": "Short interest % of float, illiquidity risk scoring",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Instruments",...
+        # Line: "endpoint": "Instruments",
         "endpoint": "Instruments",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "fundamental",...
+        # Line: "container": "fundamental",
         "container": "fundamental",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "revChangeYear",...
+        # Line: "field": "revChangeYear",
         "field": "revChangeYear",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Year-over-year revenue g...
+        # Line: "description": "Year-over-year revenue growth perc
         "description": "Year-over-year revenue growth percentage",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Top-line reve...
+        # Line: "risk_quant_application": "Top-line revenue expans
         "risk_quant_application": "Top-line revenue expansion factor screening",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Instruments",...
+        # Line: "endpoint": "Instruments",
         "endpoint": "Instruments",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "fundamental",...
+        # Line: "container": "fundamental",
         "container": "fundamental",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "operatingMarginTTM",...
+        # Line: "field": "operatingMarginTTM",
         "field": "operatingMarginTTM",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Operating income divided...
+        # Line: "description": "Operating income divided by revenu
         "description": "Operating income divided by revenue (TTM)",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Core operatio...
+        # Line: "risk_quant_application": "Core operational profit
         "risk_quant_application": "Core operational profitability factor indexing",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
     # =========================================================================
     # 6. MOVERS ENDPOINT (/movers/{index_symbol})
     # =========================================================================
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Movers",...
+        # Line: "endpoint": "Movers",
         "endpoint": "Movers",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "screeners",...
+        # Line: "container": "screeners",
         "container": "screeners",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "symbol",...
+        # Line: "field": "symbol",
         "field": "symbol",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "str",...
+        # Line: "data_type": "str",
         "data_type": "str",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Ticker symbol of the mov...
+        # Line: "description": "Ticker symbol of the mover securit
         "description": "Ticker symbol of the mover security",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Tail-event un...
+        # Line: "risk_quant_application": "Tail-event universe sel
         "risk_quant_application": "Tail-event universe selection, intraday breakout scanning",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Movers",...
+        # Line: "endpoint": "Movers",
         "endpoint": "Movers",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "screeners",...
+        # Line: "container": "screeners",
         "container": "screeners",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "lastPrice",...
+        # Line: "field": "lastPrice",
         "field": "lastPrice",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Most recent execution pr...
+        # Line: "description": "Most recent execution print",
         "description": "Most recent execution print",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Penny-stock f...
+        # Line: "risk_quant_application": "Penny-stock filtering,
         "risk_quant_application": "Penny-stock filtering, minimum price constraint filters",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Movers",...
+        # Line: "endpoint": "Movers",
         "endpoint": "Movers",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "screeners",...
+        # Line: "container": "screeners",
         "container": "screeners",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "netChange",...
+        # Line: "field": "netChange",
         "field": "netChange",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Absolute price change fr...
+        # Line: "description": "Absolute price change from baselin
         "description": "Absolute price change from baseline",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Index point c...
+        # Line: "risk_quant_application": "Index point contributio
         "risk_quant_application": "Index point contribution attribution",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Movers",...
+        # Line: "endpoint": "Movers",
         "endpoint": "Movers",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "screeners",...
+        # Line: "container": "screeners",
         "container": "screeners",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "netPercentChange",...
+        # Line: "field": "netPercentChange",
         "field": "netPercentChange",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Percentage price variati...
+        # Line: "description": "Percentage price variation from ba
         "description": "Percentage price variation from baseline",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Outlier detec...
+        # Line: "risk_quant_application": "Outlier detection, shor
         "risk_quant_application": "Outlier detection, short-term cross-sectional reversal",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Movers",...
+        # Line: "endpoint": "Movers",
         "endpoint": "Movers",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "screeners",...
+        # Line: "container": "screeners",
         "container": "screeners",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "totalVolume",...
+        # Line: "field": "totalVolume",
         "field": "totalVolume",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "int",...
+        # Line: "data_type": "int",
         "data_type": "int",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Cumulative shares traded...
+        # Line: "description": "Cumulative shares traded in sessio
         "description": "Cumulative shares traded in session",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Volume-weight...
+        # Line: "risk_quant_application": "Volume-weighted momentu
         "risk_quant_application": "Volume-weighted momentum ranking, institutional liquidity",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "Movers",...
+        # Line: "endpoint": "Movers",
         "endpoint": "Movers",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "screeners",...
+        # Line: "container": "screeners",
         "container": "screeners",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "marketShare",...
+        # Line: "field": "marketShare",
         "field": "marketShare",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "float",...
+        # Line: "data_type": "float",
         "data_type": "float",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Share volume as percenta...
+        # Line: "description": "Share volume as percentage of tota
         "description": "Share volume as percentage of total index or market volume",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Market concen...
+        # Line: "risk_quant_application": "Market concentration ri
         "risk_quant_application": "Market concentration risk, liquidity crowding analysis",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
     # =========================================================================
     # 7. MARKET HOURS ENDPOINT (/markets)
     # =========================================================================
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "MarketHours",...
+        # Line: "endpoint": "MarketHours",
         "endpoint": "MarketHours",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "root",...
+        # Line: "container": "root",
         "container": "root",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "isOpen",...
+        # Line: "field": "isOpen",
         "field": "isOpen",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "bool",...
+        # Line: "data_type": "bool",
         "data_type": "bool",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "Live flag indicating if ...
+        # Line: "description": "Live flag indicating if the specif
         "description": "Live flag indicating if the specific market is trading",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Algorithmic e...
+        # Line: "risk_quant_application": "Algorithmic execution g
         "risk_quant_application": "Algorithmic execution gate, trading pipeline activation",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "MarketHours",...
+        # Line: "endpoint": "MarketHours",
         "endpoint": "MarketHours",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "sessionHours",...
+        # Line: "container": "sessionHours",
         "container": "sessionHours",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "preMarket",...
+        # Line: "field": "preMarket",
         "field": "preMarket",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "list [start, end]",...
+        # Line: "data_type": "list [start, end]",
         "data_type": "list [start, end]",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "ISO-8601 timestamps for ...
+        # Line: "description": "ISO-8601 timestamps for pre-market
         "description": "ISO-8601 timestamps for pre-market trading window",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Off-hours ord...
+        # Line: "risk_quant_application": "Off-hours order routing
         "risk_quant_application": "Off-hours order routing, extended volatility ingestion",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "MarketHours",...
+        # Line: "endpoint": "MarketHours",
         "endpoint": "MarketHours",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "sessionHours",...
+        # Line: "container": "sessionHours",
         "container": "sessionHours",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "regularMarket",...
+        # Line: "field": "regularMarket",
         "field": "regularMarket",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "list [start, end]",...
+        # Line: "data_type": "list [start, end]",
         "data_type": "list [start, end]",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "ISO-8601 timestamps for ...
+        # Line: "description": "ISO-8601 timestamps for primary op
         "description": "ISO-8601 timestamps for primary open auction and cash session",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Active tradin...
+        # Line: "risk_quant_application": "Active trading executio
         "risk_quant_application": "Active trading execution window, continuous trading bounds",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-    # Execute this line of logic to process the data
+    # Explain this line: {...
+    # Line: {
     {
-        # Execute this line of logic to process the data
+        # Explain this line: "endpoint": "MarketHours",...
+        # Line: "endpoint": "MarketHours",
         "endpoint": "MarketHours",
-        # Execute this line of logic to process the data
+        # Explain this line: "container": "sessionHours",...
+        # Line: "container": "sessionHours",
         "container": "sessionHours",
-        # Execute this line of logic to process the data
+        # Explain this line: "field": "postMarket",...
+        # Line: "field": "postMarket",
         "field": "postMarket",
-        # Execute this line of logic to process the data
+        # Explain this line: "data_type": "list [start, end]",...
+        # Line: "data_type": "list [start, end]",
         "data_type": "list [start, end]",
-        # Execute this line of logic to process the data
+        # Explain this line: "description": "ISO-8601 timestamps for ...
+        # Line: "description": "ISO-8601 timestamps for after-hour
         "description": "ISO-8601 timestamps for after-hours trading window",
-        # Execute this line of logic to process the data
+        # Explain this line: "risk_quant_application": "Post-market s...
+        # Line: "risk_quant_application": "Post-market settlement,
         "risk_quant_application": "Post-market settlement, end-of-day batch reconciliation",
-    # Execute this line of logic to process the data
+    # Explain this line: },...
+    # Line: },
     },
-# Execute this line of logic to process the data
+# Explain this line: ]...
+# Line: ]
 ]
 
 
-# Define a new data structure or class
+# Explain this line: class SchwabSchemaCatalog:...
+# Line: class SchwabSchemaCatalog:
 class SchwabSchemaCatalog:
     """Institutional data dictionary manager for Schwab Market Data REST API schemas."""
 
-    # Define a new function or method
+    # Explain this line: def __init__(self) -> None:...
+    # Line: def __init__(self) -> None:
     def __init__(self) -> None:
-        # Assign a value or initialize a variable
+        # Explain this line: self._df = pd.DataFrame(SCHEMA_REGISTRY)...
+        # Line: self._df = pd.DataFrame(SCHEMA_REGISTRY)
         self._df = pd.DataFrame(SCHEMA_REGISTRY)
 
-    # Apply a decorator to modify function behavior
+    # Explain this line: @property...
+    # Line: @property
     @property
-    # Define a new function or method
+    # Explain this line: def catalog_df(self) -> pd.DataFrame:...
+    # Line: def catalog_df(self) -> pd.DataFrame:
     def catalog_df(self) -> pd.DataFrame:
         """Returns the complete schema catalog as a structured pandas DataFrame."""
-        # Return the final computed result to the caller
+        # Explain this line: return self._df.copy()...
+        # Line: return self._df.copy()
         return self._df.copy()
 
-    # Define a new function or method
+    # Explain this line: def list_endpoints(self) -> List[str]:...
+    # Line: def list_endpoints(self) -> List[str]:
     def list_endpoints(self) -> List[str]:
         """Returns a list of all distinct endpoint names documented in the catalog."""
-        # Return the final computed result to the caller
+        # Explain this line: return sorted(self._df["endpoint"].uniqu...
+        # Line: return sorted(self._df["endpoint"].unique().tolist
         return sorted(self._df["endpoint"].unique().tolist())
 
-    # Define a new function or method
+    # Explain this line: def get_endpoint_schema(self, endpoint_n...
+    # Line: def get_endpoint_schema(self, endpoint_name: str)
     def get_endpoint_schema(self, endpoint_name: str) -> pd.DataFrame:
         """
-        # Execute this line of logic to process the data
         Retrieves the parameter dictionary for a specific endpoint family.
-        # Execute this line of logic to process the data
         Matching is case-insensitive.
         """
-        # Assign a value or initialize a variable
+        # Explain this line: clean_name = endpoint_name.strip().lower...
+        # Line: clean_name = endpoint_name.strip().lower()
         clean_name = endpoint_name.strip().lower()
-        # Assign a value or initialize a variable
+        # Explain this line: mask = self._df["endpoint"].str.lower() ...
+        # Line: mask = self._df["endpoint"].str.lower() == clean_n
         mask = self._df["endpoint"].str.lower() == clean_name
-        # Assign a value or initialize a variable
+        # Explain this line: matched = self._df[mask]...
+        # Line: matched = self._df[mask]
         matched = self._df[mask]
 
-        # Check a conditional statement
+        # Explain this line: if matched.empty:...
+        # Line: if matched.empty:
         if matched.empty:
-            # Assign a value or initialize a variable
+            # Explain this line: valid = self.list_endpoints()...
+            # Line: valid = self.list_endpoints()
             valid = self.list_endpoints()
-            # Raise an error to stop execution
+            # Explain this line: raise ValueError(f"Endpoint '{endpoint_n...
+            # Line: raise ValueError(f"Endpoint '{endpoint_name}' not
             raise ValueError(f"Endpoint '{endpoint_name}' not found. Valid choices: {valid}")
 
-        # Assign a value or initialize a variable
+        # Explain this line: return matched.copy().reset_index(drop=T...
+        # Line: return matched.copy().reset_index(drop=True)
         return matched.copy().reset_index(drop=True)
 
-    # Define a new function or method
+    # Explain this line: def search_parameters(self, query: str) ...
+    # Line: def search_parameters(self, query: str) -> pd.Data
     def search_parameters(self, query: str) -> pd.DataFrame:
         """
-        # Execute this line of logic to process the data
         Searches across field names, definitions, and quant applications for matching terms.
         """
-        # Assign a value or initialize a variable
+        # Explain this line: q = query.strip().lower()...
+        # Line: q = query.strip().lower()
         q = query.strip().lower()
-        # Assign a value or initialize a variable
+        # Explain this line: mask = (...
+        # Line: mask = (
         mask = (
-            # Execute this line of logic to process the data
+            # Explain this line: self._df["field"].str.lower().str.contai...
+            # Line: self._df["field"].str.lower().str.contains(q)
             self._df["field"].str.lower().str.contains(q)
-            # Execute this line of logic to process the data
+            # Explain this line: | self._df["description"].str.lower().st...
+            # Line: | self._df["description"].str.lower().str.contains
             | self._df["description"].str.lower().str.contains(q)
-            # Execute this line of logic to process the data
+            # Explain this line: | self._df["risk_quant_application"].str...
+            # Line: | self._df["risk_quant_application"].str.lower().s
             | self._df["risk_quant_application"].str.lower().str.contains(q)
-        # Execute this line of logic to process the data
+        # Explain this line: )...
+        # Line: )
         )
-        # Assign a value or initialize a variable
+        # Explain this line: return self._df[mask].copy().reset_index...
+        # Line: return self._df[mask].copy().reset_index(drop=True
         return self._df[mask].copy().reset_index(drop=True)
 
-    # Define a new function or method
+    # Explain this line: def display(...
+    # Line: def display(
     def display(
-        # Execute this line of logic to process the data
+        # Explain this line: self,...
+        # Line: self,
         self,
-        # Assign a value or initialize a variable
+        # Explain this line: endpoint_name: Optional[str] = None,...
+        # Line: endpoint_name: Optional[str] = None,
         endpoint_name: Optional[str] = None,
-        # Assign a value or initialize a variable
+        # Explain this line: max_colwidth: int = 50,...
+        # Line: max_colwidth: int = 50,
         max_colwidth: int = 50,
-    # Execute this line of logic to process the data
+    # Explain this line: ) -> None:...
+    # Line: ) -> None:
     ) -> None:
         """
-        # Execute this line of logic to process the data
         Prints the catalog in a formatted tabular layout.
-        # Execute this line of logic to process the data
         If endpoint_name is omitted, prints all 7 endpoint schemas sequentially.
         """
-        # Execute this line of logic to process the data
+        # Explain this line: pd.set_option("display.max_rows", None)...
+        # Line: pd.set_option("display.max_rows", None)
         pd.set_option("display.max_rows", None)
-        # Execute this line of logic to process the data
+        # Explain this line: pd.set_option("display.max_columns", Non...
+        # Line: pd.set_option("display.max_columns", None)
         pd.set_option("display.max_columns", None)
-        # Execute this line of logic to process the data
+        # Explain this line: pd.set_option("display.width", 1000)...
+        # Line: pd.set_option("display.width", 1000)
         pd.set_option("display.width", 1000)
-        # Execute this line of logic to process the data
+        # Explain this line: pd.set_option("display.max_colwidth", ma...
+        # Line: pd.set_option("display.max_colwidth", max_colwidth
         pd.set_option("display.max_colwidth", max_colwidth)
 
-        # Assign a value or initialize a variable
+        # Explain this line: endpoints = [endpoint_name] if endpoint_...
+        # Line: endpoints = [endpoint_name] if endpoint_name else
         endpoints = [endpoint_name] if endpoint_name else self.list_endpoints()
 
-        # Start a loop over the given collection
+        # Explain this line: for ep in endpoints:...
+        # Line: for ep in endpoints:
         for ep in endpoints:
-            # Assign a value or initialize a variable
+            # Explain this line: sub_df = self.get_endpoint_schema(ep)...
+            # Line: sub_df = self.get_endpoint_schema(ep)
             sub_df = self.get_endpoint_schema(ep)
-            # Assign a value or initialize a variable
+            # Explain this line: print("\n" + "=" * 115)...
+            # Line: print("\n" + "=" * 115)
             print("\n" + "=" * 115)
-            # Execute this line of logic to process the data
+            # Explain this line: print(f"SCHWAB REST API SCHEMA: {ep.uppe...
+            # Line: print(f"SCHWAB REST API SCHEMA: {ep.upper()} ({len
             print(f"SCHWAB REST API SCHEMA: {ep.upper()} ({len(sub_df)} Parameters Documented)")
-            # Assign a value or initialize a variable
+            # Explain this line: print("=" * 115)...
+            # Line: print("=" * 115)
             print("=" * 115)
 
-            # Assign a value or initialize a variable
+            # Explain this line: display_cols = ["container", "field", "d...
+            # Line: display_cols = ["container", "field", "data_type",
             display_cols = ["container", "field", "data_type", "description", "risk_quant_application"]
-            # Assign a value or initialize a variable
+            # Explain this line: table_str = sub_df[display_cols].to_stri...
+            # Line: table_str = sub_df[display_cols].to_string(
             table_str = sub_df[display_cols].to_string(
-                # Assign a value or initialize a variable
+                # Explain this line: index=False,...
+                # Line: index=False,
                 index=False,
-                # Assign a value or initialize a variable
+                # Explain this line: justify="left",...
+                # Line: justify="left",
                 justify="left",
-                # Assign a value or initialize a variable
+                # Explain this line: header=["Container", "Field Name", "Type...
+                # Line: header=["Container", "Field Name", "Type", "Semant
                 header=["Container", "Field Name", "Type", "Semantic Meaning", "Institutional Quant / Risk Use"],
-            # Execute this line of logic to process the data
+            # Explain this line: )...
+            # Line: )
             )
-            # Execute this line of logic to process the data
+            # Explain this line: print(table_str)...
+            # Line: print(table_str)
             print(table_str)
-            # Execute this line of logic to process the data
+            # Explain this line: print("-" * 115)...
+            # Line: print("-" * 115)
             print("-" * 115)
 
 
-# Define a new function or method
+# Explain this line: def _build_arg_parser() -> argparse.Argu...
+# Line: def _build_arg_parser() -> argparse.ArgumentParser
 def _build_arg_parser() -> argparse.ArgumentParser:
-    # Assign a value or initialize a variable
+    # Explain this line: parser = argparse.ArgumentParser(...
+    # Line: parser = argparse.ArgumentParser(
     parser = argparse.ArgumentParser(
-        # Assign a value or initialize a variable
+        # Explain this line: description="Schwab Market Data API Full...
+        # Line: description="Schwab Market Data API Full Schema Ca
         description="Schwab Market Data API Full Schema Catalog & Reference Dictionary",
-        # Assign a value or initialize a variable
+        # Explain this line: formatter_class=argparse.ArgumentDefault...
+        # Line: formatter_class=argparse.ArgumentDefaultsHelpForma
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-    # Execute this line of logic to process the data
+    # Explain this line: )...
+    # Line: )
     )
-    # Execute this line of logic to process the data
+    # Explain this line: parser.add_argument(...
+    # Line: parser.add_argument(
     parser.add_argument(
-        # Execute this line of logic to process the data
+        # Explain this line: "--endpoint",...
+        # Line: "--endpoint",
         "--endpoint",
-        # Assign a value or initialize a variable
+        # Explain this line: type=str,...
+        # Line: type=str,
         type=str,
-        # Assign a value or initialize a variable
+        # Explain this line: default=None,...
+        # Line: default=None,
         default=None,
-        # Assign a value or initialize a variable
+        # Explain this line: choices=["Quotes", "PriceHistory", "Opti...
+        # Line: choices=["Quotes", "PriceHistory", "OptionChains",
         choices=["Quotes", "PriceHistory", "OptionChains", "OptionExpirations", "Instruments", "Movers", "MarketHours"],
-        # Assign a value or initialize a variable
+        # Explain this line: help="Filter schema to a single endpoint...
+        # Line: help="Filter schema to a single endpoint family",
         help="Filter schema to a single endpoint family",
-    # Execute this line of logic to process the data
+    # Explain this line: )...
+    # Line: )
     )
-    # Execute this line of logic to process the data
+    # Explain this line: parser.add_argument(...
+    # Line: parser.add_argument(
     parser.add_argument(
-        # Execute this line of logic to process the data
+        # Explain this line: "--search",...
+        # Line: "--search",
         "--search",
-        # Assign a value or initialize a variable
+        # Explain this line: type=str,...
+        # Line: type=str,
         type=str,
-        # Assign a value or initialize a variable
+        # Explain this line: default=None,...
+        # Line: default=None,
         default=None,
-        # Assign a value or initialize a variable
+        # Explain this line: help="Search for a parameter or financia...
+        # Line: help="Search for a parameter or financial concept
         help="Search for a parameter or financial concept across all schemas",
-    # Execute this line of logic to process the data
+    # Explain this line: )...
+    # Line: )
     )
-    # Execute this line of logic to process the data
+    # Explain this line: parser.add_argument(...
+    # Line: parser.add_argument(
     parser.add_argument(
-        # Execute this line of logic to process the data
+        # Explain this line: "--export-csv",...
+        # Line: "--export-csv",
         "--export-csv",
-        # Assign a value or initialize a variable
+        # Explain this line: type=str,...
+        # Line: type=str,
         type=str,
-        # Assign a value or initialize a variable
+        # Explain this line: default=None,...
+        # Line: default=None,
         default=None,
-        # Assign a value or initialize a variable
+        # Explain this line: help="Export the entire schema data dict...
+        # Line: help="Export the entire schema data dictionary to
         help="Export the entire schema data dictionary to a CSV file",
-    # Execute this line of logic to process the data
+    # Explain this line: )...
+    # Line: )
     )
-    # Return the final computed result to the caller
+    # Explain this line: return parser...
+    # Line: return parser
     return parser
 
 
-# Define a new function or method
+# Explain this line: def main(argv: Optional[List[str]] = Non...
+# Line: def main(argv: Optional[List[str]] = None) -> int:
 def main(argv: Optional[List[str]] = None) -> int:
-    # Assign a value or initialize a variable
+    # Explain this line: parser = _build_arg_parser()...
+    # Line: parser = _build_arg_parser()
     parser = _build_arg_parser()
-    # Assign a value or initialize a variable
+    # Explain this line: args = parser.parse_args(argv)...
+    # Line: args = parser.parse_args(argv)
     args = parser.parse_args(argv)
 
-    # Assign a value or initialize a variable
+    # Explain this line: catalog = SchwabSchemaCatalog()...
+    # Line: catalog = SchwabSchemaCatalog()
     catalog = SchwabSchemaCatalog()
 
-    # Check a conditional statement
+    # Explain this line: if args.export_csv:...
+    # Line: if args.export_csv:
     if args.export_csv:
-        # Assign a value or initialize a variable
+        # Explain this line: catalog.catalog_df.to_csv(args.export_cs...
+        # Line: catalog.catalog_df.to_csv(args.export_csv, index=F
         catalog.catalog_df.to_csv(args.export_csv, index=False)
-        # Execute this line of logic to process the data
+        # Explain this line: print(f"[OK] Full schema catalog ({len(c...
+        # Line: print(f"[OK] Full schema catalog ({len(catalog.cat
         print(f"[OK] Full schema catalog ({len(catalog.catalog_df)} fields) exported to {args.export_csv}")
-        # Return the final computed result to the caller
+        # Explain this line: return 0...
+        # Line: return 0
         return 0
 
-    # Check a conditional statement
+    # Explain this line: if args.search:...
+    # Line: if args.search:
     if args.search:
-        # Assign a value or initialize a variable
+        # Explain this line: results = catalog.search_parameters(args...
+        # Line: results = catalog.search_parameters(args.search)
         results = catalog.search_parameters(args.search)
-        # Execute this line of logic to process the data
+        # Explain this line: print(f"\nSearch results for '{args.sear...
+        # Line: print(f"\nSearch results for '{args.search}' ({len
         print(f"\nSearch results for '{args.search}' ({len(results)} matches):")
-        # Assign a value or initialize a variable
+        # Explain this line: print(results[["endpoint", "container", ...
+        # Line: print(results[["endpoint", "container", "field", "
         print(results[["endpoint", "container", "field", "data_type", "description"]].to_string(index=False))
-        # Return the final computed result to the caller
+        # Explain this line: return 0...
+        # Line: return 0
         return 0
 
-    # Assign a value or initialize a variable
+    # Explain this line: catalog.display(endpoint_name=args.endpo...
+    # Line: catalog.display(endpoint_name=args.endpoint)
     catalog.display(endpoint_name=args.endpoint)
-    # Return the final computed result to the caller
+    # Explain this line: return 0...
+    # Line: return 0
     return 0
 
 
-# Check a conditional statement
+# Explain this line: if __name__ == "__main__":...
+# Line: if __name__ == "__main__":
 if __name__ == "__main__":
-    # Execute this line of logic to process the data
+    # Explain this line: sys.exit(main())...
+    # Line: sys.exit(main())
     sys.exit(main())

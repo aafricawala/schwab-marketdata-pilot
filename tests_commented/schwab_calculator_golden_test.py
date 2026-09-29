@@ -17,206 +17,282 @@
 # Notes: None.
 
 """
-# Execute this line of logic to process the data
 schwab_calculator_golden_test.py
 
-# Execute this line of logic to process the data
 Calculator-layer golden harness for MasterThesisCalculator.calculate_metrics().
 
-# Execute this line of logic to process the data
 Complements tests/schwab_refactor_payload_mock_test.py (which covers the
-# Execute this line of logic to process the data
 grounding layer) by pinning the output of the calculator facade itself.
 
-# Execute this line of logic to process the data
 First run: if tests/schwab_calculator_golden.json is absent, the harness
-          # Execute this line of logic to process the data
           writes it and passes (self-bootstrap).
-# Execute this line of logic to process the data
 Later runs: the harness asserts byte-for-byte dict equality.
 """
-# Import specific components from a module
+# Explain this line: from __future__ import annotations...
+# Line: from __future__ import annotations
 from __future__ import annotations
 
-# Import the required external module
+# Explain this line: import json...
+# Line: import json
 import json
-# Import the required external module
+# Explain this line: import os...
+# Line: import os
 import os
-# Import the required external module
+# Explain this line: import sys...
+# Line: import sys
 import sys
 
-# Import the required external module
+# Explain this line: import numpy as np...
+# Line: import numpy as np
 import numpy as np
-# Import the required external module
+# Explain this line: import pandas as pd...
+# Line: import pandas as pd
 import pandas as pd
-# Import the required external module
+# Explain this line: import pytest...
+# Line: import pytest
 import pytest
 
-# Assign a value or initialize a variable
+# Explain this line: _THIS_DIR = os.path.dirname(os.path.absp...
+# Line: _THIS_DIR = os.path.dirname(os.path.abspath(__file
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
-# Assign a value or initialize a variable
+# Explain this line: _SRC_DIR = os.path.join(os.path.dirname(...
+# Line: _SRC_DIR = os.path.join(os.path.dirname(_THIS_DIR)
 _SRC_DIR = os.path.join(os.path.dirname(_THIS_DIR), "src")
-# Check a conditional statement
+# Explain this line: if _SRC_DIR not in sys.path:...
+# Line: if _SRC_DIR not in sys.path:
 if _SRC_DIR not in sys.path:
-    # Execute this line of logic to process the data
+    # Explain this line: sys.path.insert(0, _SRC_DIR)...
+    # Line: sys.path.insert(0, _SRC_DIR)
     sys.path.insert(0, _SRC_DIR)
 
-# Import specific components from a module
+# Explain this line: from schwab_marketdata_calculator import...
+# Line: from schwab_marketdata_calculator import MasterThe
 from schwab_marketdata_calculator import MasterThesisCalculator  # noqa: E402
 
-# Assign a value or initialize a variable
+# Explain this line: _GOLDEN_PATH = os.path.join(_THIS_DIR, "...
+# Line: _GOLDEN_PATH = os.path.join(_THIS_DIR, "schwab_cal
 _GOLDEN_PATH = os.path.join(_THIS_DIR, "schwab_calculator_golden.json")
 
 
-# Define a new function or method
+# Explain this line: def _price_history(n=260, base=100.0, se...
+# Line: def _price_history(n=260, base=100.0, seed=7):
 def _price_history(n=260, base=100.0, seed=7):
-    # Assign a value or initialize a variable
+    # Explain this line: rng = np.random.default_rng(seed)...
+    # Line: rng = np.random.default_rng(seed)
     rng = np.random.default_rng(seed)
-    # Assign a value or initialize a variable
+    # Explain this line: idx = pd.date_range("2023-01-01", period...
+    # Line: idx = pd.date_range("2023-01-01", periods=n, freq=
     idx = pd.date_range("2023-01-01", periods=n, freq="B")
-    # Assign a value or initialize a variable
+    # Explain this line: rets = rng.normal(0.0, 0.012, size=n)...
+    # Line: rets = rng.normal(0.0, 0.012, size=n)
     rets = rng.normal(0.0, 0.012, size=n)
-    # Assign a value or initialize a variable
+    # Explain this line: close = base * np.exp(np.cumsum(rets))...
+    # Line: close = base * np.exp(np.cumsum(rets))
     close = base * np.exp(np.cumsum(rets))
-    # Assign a value or initialize a variable
+    # Explain this line: high = close * (1.0 + np.abs(rng.normal(...
+    # Line: high = close * (1.0 + np.abs(rng.normal(0.0, 0.004
     high = close * (1.0 + np.abs(rng.normal(0.0, 0.004, size=n)))
-    # Assign a value or initialize a variable
+    # Explain this line: low = close * (1.0 - np.abs(rng.normal(0...
+    # Line: low = close * (1.0 - np.abs(rng.normal(0.0, 0.004,
     low = close * (1.0 - np.abs(rng.normal(0.0, 0.004, size=n)))
-    # Assign a value or initialize a variable
+    # Explain this line: open_ = np.concatenate([[close[0]], clos...
+    # Line: open_ = np.concatenate([[close[0]], close[:-1]])
     open_ = np.concatenate([[close[0]], close[:-1]])
-    # Return the final computed result to the caller
+    # Explain this line: return pd.DataFrame({"datetime": idx, "o...
+    # Line: return pd.DataFrame({"datetime": idx, "open": open
     return pd.DataFrame({"datetime": idx, "open": open_, "high": high, "low": low, "close": close})
 
 
-# Define a new function or method
+# Explain this line: def _options(spot=100.0, dtes=(7, 21, 35...
+# Line: def _options(spot=100.0, dtes=(7, 21, 35, 60), see
 def _options(spot=100.0, dtes=(7, 21, 35, 60), seed=11):
-    # Assign a value or initialize a variable
+    # Explain this line: rng = np.random.default_rng(seed)...
+    # Line: rng = np.random.default_rng(seed)
     rng = np.random.default_rng(seed)
-    # Assign a value or initialize a variable
+    # Explain this line: rows = []...
+    # Line: rows = []
     rows = []
-    # Start a loop over the given collection
+    # Explain this line: for dte in dtes:...
+    # Line: for dte in dtes:
     for dte in dtes:
-        # Start a loop over the given collection
+        # Explain this line: for k_off in (-0.10, -0.05, 0.0, 0.05, 0...
+        # Line: for k_off in (-0.10, -0.05, 0.0, 0.05, 0.10):
         for k_off in (-0.10, -0.05, 0.0, 0.05, 0.10):
-            # Assign a value or initialize a variable
+            # Explain this line: strike = round(spot * (1.0 + k_off), 2)...
+            # Line: strike = round(spot * (1.0 + k_off), 2)
             strike = round(spot * (1.0 + k_off), 2)
-            # Start a loop over the given collection
+            # Explain this line: for pc in ("PUT", "CALL"):...
+            # Line: for pc in ("PUT", "CALL"):
             for pc in ("PUT", "CALL"):
-                # Assign a value or initialize a variable
+                # Explain this line: delta = (-1 if pc == "PUT" else 1) * max...
+                # Line: delta = (-1 if pc == "PUT" else 1) * max(0.05, 0.5
                 delta = (-1 if pc == "PUT" else 1) * max(0.05, 0.5 - abs(k_off) * 3.0)
-                # Assign a value or initialize a variable
+                # Explain this line: iv = 0.25 + abs(k_off) * 1.2 + rng.norma...
+                # Line: iv = 0.25 + abs(k_off) * 1.2 + rng.normal(0.0, 0.0
                 iv = 0.25 + abs(k_off) * 1.2 + rng.normal(0.0, 0.005)
-                # Assign a value or initialize a variable
+                # Explain this line: mark = max(0.05, spot * 0.02 * (1.0 + ab...
+                # Line: mark = max(0.05, spot * 0.02 * (1.0 + abs(k_off) *
                 mark = max(0.05, spot * 0.02 * (1.0 + abs(k_off) * 3.0))
-                # Execute this line of logic to process the data
+                # Explain this line: rows.append({...
+                # Line: rows.append({
                 rows.append({
-                    # Execute this line of logic to process the data
+                    # Explain this line: "putCallIndicator": pc,...
+                    # Line: "putCallIndicator": pc,
                     "putCallIndicator": pc,
-                    # Execute this line of logic to process the data
+                    # Explain this line: "daysToExpiration": dte,...
+                    # Line: "daysToExpiration": dte,
                     "daysToExpiration": dte,
-                    # Execute this line of logic to process the data
+                    # Explain this line: "strikePrice": strike,...
+                    # Line: "strikePrice": strike,
                     "strikePrice": strike,
-                    # Execute this line of logic to process the data
+                    # Explain this line: "delta": delta,...
+                    # Line: "delta": delta,
                     "delta": delta,
-                    # Execute this line of logic to process the data
+                    # Explain this line: "volatility": iv,...
+                    # Line: "volatility": iv,
                     "volatility": iv,
-                    # Execute this line of logic to process the data
+                    # Explain this line: "mark": mark,...
+                    # Line: "mark": mark,
                     "mark": mark,
-                    # Execute this line of logic to process the data
+                    # Explain this line: "bid": round(mark * 0.98, 2),...
+                    # Line: "bid": round(mark * 0.98, 2),
                     "bid": round(mark * 0.98, 2),
-                    # Execute this line of logic to process the data
+                    # Explain this line: "ask": round(mark * 1.02, 2),...
+                    # Line: "ask": round(mark * 1.02, 2),
                     "ask": round(mark * 1.02, 2),
-                    # Execute this line of logic to process the data
+                    # Explain this line: "totalVolume": int(rng.integers(10, 5000...
+                    # Line: "totalVolume": int(rng.integers(10, 5000)),
                     "totalVolume": int(rng.integers(10, 5000)),
-                    # Execute this line of logic to process the data
+                    # Explain this line: "openInterest": int(rng.integers(50, 200...
+                    # Line: "openInterest": int(rng.integers(50, 20000)),
                     "openInterest": int(rng.integers(50, 20000)),
-                # Execute this line of logic to process the data
+                # Explain this line: })...
+                # Line: })
                 })
-    # Return the final computed result to the caller
+    # Explain this line: return pd.DataFrame(rows)...
+    # Line: return pd.DataFrame(rows)
     return pd.DataFrame(rows)
 
 
-# Define a new function or method
+# Explain this line: def _build_inputs():...
+# Line: def _build_inputs():
 def _build_inputs():
-    # Assign a value or initialize a variable
+    # Explain this line: raw = {...
+    # Line: raw = {
     raw = {
-        # Execute this line of logic to process the data
+        # Explain this line: "phase_0_grounding": {"lastPrice": 102.0...
+        # Line: "phase_0_grounding": {"lastPrice": 102.0, "closePr
         "phase_0_grounding": {"lastPrice": 102.0, "closePrice": 101.5, "market_isOpen": True, "quote_age_seconds": 30.0},
-        # Execute this line of logic to process the data
+        # Explain this line: "step_1_fundamentals": {...
+        # Line: "step_1_fundamentals": {
         "step_1_fundamentals": {
-            # Execute this line of logic to process the data
+            # Explain this line: "peRatio": 22.5, "eps": 4.10, "divAmount...
+            # Line: "peRatio": 22.5, "eps": 4.10, "divAmount": 1.20, "
             "peRatio": 22.5, "eps": 4.10, "divAmount": 1.20, "divYield": 1.18,
-            # Execute this line of logic to process the data
+            # Explain this line: "sharesOutstanding": 1_000_000_000.0, "m...
+            # Line: "sharesOutstanding": 1_000_000_000.0, "marketCap":
             "sharesOutstanding": 1_000_000_000.0, "marketCap": 102_500_000_000.0,
-            # Execute this line of logic to process the data
+            # Explain this line: "eps_state": "VENDOR_PROVIDED", "peRatio...
+            # Line: "eps_state": "VENDOR_PROVIDED", "peRatio_state": "
             "eps_state": "VENDOR_PROVIDED", "peRatio_state": "VENDOR_PROVIDED",
-            # Execute this line of logic to process the data
+            # Explain this line: "shares_outstanding_state": "VENDOR_PROV...
+            # Line: "shares_outstanding_state": "VENDOR_PROVIDED",
             "shares_outstanding_state": "VENDOR_PROVIDED",
-        # Execute this line of logic to process the data
+        # Explain this line: },...
+        # Line: },
         },
-        # Execute this line of logic to process the data
+        # Explain this line: "step_3_and_7_derivatives": {"surface_pa...
+        # Line: "step_3_and_7_derivatives": {"surface_parameters":
         "step_3_and_7_derivatives": {"surface_parameters": {"underlyingPrice": 102.0}},
-    # Execute this line of logic to process the data
+    # Explain this line: }...
+    # Line: }
     }
-    # Assign a value or initialize a variable
+    # Explain this line: return raw, _price_history(), _options(s...
+    # Line: return raw, _price_history(), _options(spot=102.0)
     return raw, _price_history(), _options(spot=102.0), {}
 
 
-# Define a new function or method
+# Explain this line: def _nan_aware_equal(a, b):...
+# Line: def _nan_aware_equal(a, b):
 def _nan_aware_equal(a, b):
     """Deep equality that treats NaN == NaN and keeps numeric type fidelity."""
-    # Import the required external module
+    # Explain this line: import math...
+    # Line: import math
     import math
-    # Check a conditional statement
+    # Explain this line: if isinstance(a, dict) and isinstance(b,...
+    # Line: if isinstance(a, dict) and isinstance(b, dict):
     if isinstance(a, dict) and isinstance(b, dict):
-        # Check a conditional statement
+        # Explain this line: if set(a.keys()) != set(b.keys()):...
+        # Line: if set(a.keys()) != set(b.keys()):
         if set(a.keys()) != set(b.keys()):
-            # Return the final computed result to the caller
+            # Explain this line: return False...
+            # Line: return False
             return False
-        # Return the final computed result to the caller
+        # Explain this line: return all(_nan_aware_equal(a[k], b[k]) ...
+        # Line: return all(_nan_aware_equal(a[k], b[k]) for k in a
         return all(_nan_aware_equal(a[k], b[k]) for k in a)
-    # Check a conditional statement
+    # Explain this line: if isinstance(a, list) and isinstance(b,...
+    # Line: if isinstance(a, list) and isinstance(b, list):
     if isinstance(a, list) and isinstance(b, list):
-        # Check a conditional statement
+        # Explain this line: if len(a) != len(b):...
+        # Line: if len(a) != len(b):
         if len(a) != len(b):
-            # Return the final computed result to the caller
+            # Explain this line: return False...
+            # Line: return False
             return False
-        # Return the final computed result to the caller
+        # Explain this line: return all(_nan_aware_equal(x, y) for x,...
+        # Line: return all(_nan_aware_equal(x, y) for x, y in zip(
         return all(_nan_aware_equal(x, y) for x, y in zip(a, b))
-    # Check a conditional statement
+    # Explain this line: if isinstance(a, float) and isinstance(b...
+    # Line: if isinstance(a, float) and isinstance(b, float):
     if isinstance(a, float) and isinstance(b, float):
-        # Check a conditional statement
+        # Explain this line: if math.isnan(a) and math.isnan(b):...
+        # Line: if math.isnan(a) and math.isnan(b):
         if math.isnan(a) and math.isnan(b):
-            # Return the final computed result to the caller
+            # Explain this line: return True...
+            # Line: return True
             return True
-    # Assign a value or initialize a variable
+    # Explain this line: return a == b...
+    # Line: return a == b
     return a == b
 
 
-# Define a new function or method
+# Explain this line: def test_calculator_golden():...
+# Line: def test_calculator_golden():
 def test_calculator_golden():
-    # Assign a value or initialize a variable
+    # Explain this line: raw, ph, opt, params = _build_inputs()...
+    # Line: raw, ph, opt, params = _build_inputs()
     raw, ph, opt, params = _build_inputs()
-    # Assign a value or initialize a variable
+    # Explain this line: result = MasterThesisCalculator(raw, ph,...
+    # Line: result = MasterThesisCalculator(raw, ph, opt, para
     result = MasterThesisCalculator(raw, ph, opt, params).calculate_metrics()
 
-    # Check a conditional statement
+    # Explain this line: if not os.path.exists(_GOLDEN_PATH):...
+    # Line: if not os.path.exists(_GOLDEN_PATH):
     if not os.path.exists(_GOLDEN_PATH):
-        # Execute this line of logic to process the data
+        # Explain this line: with open(_GOLDEN_PATH, "w") as fh:...
+        # Line: with open(_GOLDEN_PATH, "w") as fh:
         with open(_GOLDEN_PATH, "w") as fh:
-            # Assign a value or initialize a variable
+            # Explain this line: json.dump(result, fh, indent=2, sort_key...
+            # Line: json.dump(result, fh, indent=2, sort_keys=True, de
             json.dump(result, fh, indent=2, sort_keys=True, default=str)
-        # Execute this line of logic to process the data
+        # Explain this line: pytest.skip(f"bootstrapped golden at {_G...
+        # Line: pytest.skip(f"bootstrapped golden at {_GOLDEN_PATH
         pytest.skip(f"bootstrapped golden at {_GOLDEN_PATH}")
 
-    # Execute this line of logic to process the data
+    # Explain this line: with open(_GOLDEN_PATH) as fh:...
+    # Line: with open(_GOLDEN_PATH) as fh:
     with open(_GOLDEN_PATH) as fh:
-        # Assign a value or initialize a variable
+        # Explain this line: expected = json.load(fh)...
+        # Line: expected = json.load(fh)
         expected = json.load(fh)
 
-    # Execute this line of logic to process the data
+    # Explain this line: assert _nan_aware_equal(result, expected...
+    # Line: assert _nan_aware_equal(result, expected), (
     assert _nan_aware_equal(result, expected), (
-        # Execute this line of logic to process the data
+        # Explain this line: "calculator output diverged from golden"...
+        # Line: "calculator output diverged from golden"
         "calculator output diverged from golden"
-    # Execute this line of logic to process the data
+    # Explain this line: )...
+    # Line: )
     )

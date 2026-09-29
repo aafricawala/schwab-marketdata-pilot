@@ -17,1325 +17,1775 @@
 # Notes: None.
 
 """
-# Execute this line of logic to process the data
 schwab_client.py
 """
 
-# Import specific components from a module
+# Explain this line: from __future__ import annotations...
+# Line: from __future__ import annotations
 from __future__ import annotations
 
-# Import the required external module
+# Explain this line: import base64...
+# Line: import base64
 import base64
-# Import the required external module
+# Explain this line: import email.utils...
+# Line: import email.utils
 import email.utils
-# Import the required external module
+# Explain this line: import json...
+# Line: import json
 import json
-# Import the required external module
+# Explain this line: import logging...
+# Line: import logging
 import logging
-# Import the required external module
+# Explain this line: import os...
+# Line: import os
 import os
-# Import the required external module
+# Explain this line: import threading...
+# Line: import threading
 import threading
-# Import the required external module
+# Explain this line: import time...
+# Line: import time
 import time
-# Import the required external module
+# Explain this line: import urllib.parse...
+# Line: import urllib.parse
 import urllib.parse
-# Import specific components from a module
+# Explain this line: from dataclasses import dataclass...
+# Line: from dataclasses import dataclass
 from dataclasses import dataclass
-# Import specific components from a module
+# Explain this line: from pathlib import Path...
+# Line: from pathlib import Path
 from pathlib import Path
-# Import specific components from a module
+# Explain this line: from typing import Any, Dict, List, Opti...
+# Line: from typing import Any, Dict, List, Optional, Tupl
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-# Import the required external module
+# Explain this line: import requests...
+# Line: import requests
 import requests
-# Import specific components from a module
+# Explain this line: from requests import Response, Session...
+# Line: from requests import Response, Session
 from requests import Response, Session
-# Import specific components from a module
+# Explain this line: from requests.adapters import HTTPAdapte...
+# Line: from requests.adapters import HTTPAdapter
 from requests.adapters import HTTPAdapter
-# Import specific components from a module
+# Explain this line: from urllib3.util.retry import Retry...
+# Line: from urllib3.util.retry import Retry
 from urllib3.util.retry import Retry
 
 # ---------------------------------------------------------------------------
 # GATEWAY CONFIGURATION CONSTANTS
 # ---------------------------------------------------------------------------
-# Assign a value or initialize a variable
+# Explain this line: AUTH_URL = "https://api.schwabapi.com/v1...
+# Line: AUTH_URL = "https://api.schwabapi.com/v1/oauth/aut
 AUTH_URL = "https://api.schwabapi.com/v1/oauth/authorize"
-# Assign a value or initialize a variable
+# Explain this line: TOKEN_URL = "https://api.schwabapi.com/v...
+# Line: TOKEN_URL = "https://api.schwabapi.com/v1/oauth/to
 TOKEN_URL = "https://api.schwabapi.com/v1/oauth/token"
-# Assign a value or initialize a variable
+# Explain this line: MARKETDATA_BASE = "https://api.schwabapi...
+# Line: MARKETDATA_BASE = "https://api.schwabapi.com/marke
 MARKETDATA_BASE = "https://api.schwabapi.com/marketdata/v1"
 
 # Connect timeout: 3.05s (prevents TCP syn drop hang), Read timeout: 15.0s
-# Assign a value or initialize a variable
+# Explain this line: DEFAULT_TIMEOUT: Tuple[float, float] = (...
+# Line: DEFAULT_TIMEOUT: Tuple[float, float] = (3.05, 15.0
 DEFAULT_TIMEOUT: Tuple[float, float] = (3.05, 15.0)
-# Assign a value or initialize a variable
+# Explain this line: DEFAULT_RETRIES = 3...
+# Line: DEFAULT_RETRIES = 3
 DEFAULT_RETRIES = 3
-# Assign a value or initialize a variable
+# Explain this line: DEFAULT_BACKOFF_FACTOR = 0.5...
+# Line: DEFAULT_BACKOFF_FACTOR = 0.5
 DEFAULT_BACKOFF_FACTOR = 0.5
-# Assign a value or initialize a variable
+# Explain this line: TOKEN_EXPIRY_BUFFER = 60  # Seconds befo...
+# Line: TOKEN_EXPIRY_BUFFER = 60  # Seconds before nominal
 TOKEN_EXPIRY_BUFFER = 60  # Seconds before nominal expiry to proactively refresh
 
-# Assign a value or initialize a variable
+# Explain this line: logger = logging.getLogger("schwab_clien...
+# Line: logger = logging.getLogger("schwab_client")
 logger = logging.getLogger("schwab_client")
-# Log an important message or event
+# Explain this line: logger.addHandler(logging.NullHandler())...
+# Line: logger.addHandler(logging.NullHandler())
 logger.addHandler(logging.NullHandler())
 
 
 # ---------------------------------------------------------------------------
 # CUSTOM EXCEPTION HIERARCHY
 # ---------------------------------------------------------------------------
-# Define a new data structure or class
+# Explain this line: class SchwabClientError(Exception):...
+# Line: class SchwabClientError(Exception):
 class SchwabClientError(Exception):
     """Base exception for all Schwab client failures."""
 
 
-# Define a new data structure or class
+# Explain this line: class TokenError(SchwabClientError):...
+# Line: class TokenError(SchwabClientError):
 class TokenError(SchwabClientError):
     """Raised when token retrieval, decoding, persistence, or refresh fails."""
 
 
-# Define a new data structure or class
+# Explain this line: class CallbackURLError(SchwabClientError...
+# Line: class CallbackURLError(SchwabClientError):
 class CallbackURLError(SchwabClientError):
     """Raised when the redirect_uri violates Schwab Developer Portal specifications."""
 
 
-# Define a new data structure or class
+# Explain this line: class APIRequestError(SchwabClientError)...
+# Line: class APIRequestError(SchwabClientError):
 class APIRequestError(SchwabClientError):
     """
-    # Execute this line of logic to process the data
     Raised when an API endpoint returns an unrecoverable HTTP status.
-    # Execute this line of logic to process the data
     Carries the HTTP status code, Schwab Correlation ID, and structured error details.
     """
 
-    # Define a new function or method
+    # Explain this line: def __init__(...
+    # Line: def __init__(
     def __init__(
-        # Execute this line of logic to process the data
+        # Explain this line: self,...
+        # Line: self,
         self,
-        # Execute this line of logic to process the data
+        # Explain this line: message: str,...
+        # Line: message: str,
         message: str,
-        # Assign a value or initialize a variable
+        # Explain this line: status_code: Optional[int] = None,...
+        # Line: status_code: Optional[int] = None,
         status_code: Optional[int] = None,
-        # Assign a value or initialize a variable
+        # Explain this line: correl_id: Optional[str] = None,...
+        # Line: correl_id: Optional[str] = None,
         correl_id: Optional[str] = None,
-        # Assign a value or initialize a variable
+        # Explain this line: error_details: Optional[str] = None,...
+        # Line: error_details: Optional[str] = None,
         error_details: Optional[str] = None,
-    # Execute this line of logic to process the data
+    # Explain this line: ) -> None:...
+    # Line: ) -> None:
     ) -> None:
-        # Execute this line of logic to process the data
+        # Explain this line: super().__init__(message)...
+        # Line: super().__init__(message)
         super().__init__(message)
-        # Assign a value or initialize a variable
+        # Explain this line: self.status_code = status_code...
+        # Line: self.status_code = status_code
         self.status_code = status_code
-        # Assign a value or initialize a variable
+        # Explain this line: self.correl_id = correl_id or "UNKNOWN"...
+        # Line: self.correl_id = correl_id or "UNKNOWN"
         self.correl_id = correl_id or "UNKNOWN"
-        # Assign a value or initialize a variable
+        # Explain this line: self.error_details = error_details or ""...
+        # Line: self.error_details = error_details or ""
         self.error_details = error_details or ""
 
 
 # ---------------------------------------------------------------------------
 # IMMUTABLE TOKEN CONTAINER
 # ---------------------------------------------------------------------------
-# Assign a value or initialize a variable
+# Explain this line: @dataclass(frozen=True)...
+# Line: @dataclass(frozen=True)
 @dataclass(frozen=True)
-# Define a new data structure or class
+# Explain this line: class TokenPayload:...
+# Line: class TokenPayload:
 class TokenPayload:
     """Thread-safe, immutable representation of OAuth credentials and lifecycle timestamps."""
-    # Execute this line of logic to process the data
+    # Explain this line: access_token: str...
+    # Line: access_token: str
     access_token: str
-    # Execute this line of logic to process the data
+    # Explain this line: token_type: str...
+    # Line: token_type: str
     token_type: str
-    # Execute this line of logic to process the data
+    # Explain this line: expires_in: int...
+    # Line: expires_in: int
     expires_in: int
-    # Execute this line of logic to process the data
+    # Explain this line: expires_at: float...
+    # Line: expires_at: float
     expires_at: float
-    # Assign a value or initialize a variable
+    # Explain this line: refresh_token: Optional[str] = None...
+    # Line: refresh_token: Optional[str] = None
     refresh_token: Optional[str] = None
-    # Assign a value or initialize a variable
+    # Explain this line: scope: Optional[str] = None...
+    # Line: scope: Optional[str] = None
     scope: Optional[str] = None
 
-    # Apply a decorator to modify function behavior
+    # Explain this line: @classmethod...
+    # Line: @classmethod
     @classmethod
-    # Define a new function or method
+    # Explain this line: def from_dict(cls, data: Dict[str, Any])...
+    # Line: def from_dict(cls, data: Dict[str, Any]) -> "Token
     def from_dict(cls, data: Dict[str, Any]) -> "TokenPayload":
-        # Assign a value or initialize a variable
+        # Explain this line: now = time.time()...
+        # Line: now = time.time()
         now = time.time()
-        # Assign a value or initialize a variable
+        # Explain this line: expires_in = int(data.get("expires_in", ...
+        # Line: expires_in = int(data.get("expires_in", 1800))
         expires_in = int(data.get("expires_in", 1800))
-        # Assign a value or initialize a variable
+        # Explain this line: expires_at = float(data.get("expires_at"...
+        # Line: expires_at = float(data.get("expires_at", now + ex
         expires_at = float(data.get("expires_at", now + expires_in))
 
-        # Return the final computed result to the caller
+        # Explain this line: return cls(...
+        # Line: return cls(
         return cls(
-            # Assign a value or initialize a variable
+            # Explain this line: access_token=data["access_token"],...
+            # Line: access_token=data["access_token"],
             access_token=data["access_token"],
-            # Assign a value or initialize a variable
+            # Explain this line: token_type=data.get("token_type", "Beare...
+            # Line: token_type=data.get("token_type", "Bearer"),
             token_type=data.get("token_type", "Bearer"),
-            # Assign a value or initialize a variable
+            # Explain this line: expires_in=expires_in,...
+            # Line: expires_in=expires_in,
             expires_in=expires_in,
-            # Assign a value or initialize a variable
+            # Explain this line: expires_at=expires_at,...
+            # Line: expires_at=expires_at,
             expires_at=expires_at,
-            # Assign a value or initialize a variable
+            # Explain this line: refresh_token=data.get("refresh_token"),...
+            # Line: refresh_token=data.get("refresh_token"),
             refresh_token=data.get("refresh_token"),
-            # Assign a value or initialize a variable
+            # Explain this line: scope=data.get("scope"),...
+            # Line: scope=data.get("scope"),
             scope=data.get("scope"),
-        # Execute this line of logic to process the data
+        # Explain this line: )...
+        # Line: )
         )
 
-    # Define a new function or method
+    # Explain this line: def to_dict(self) -> Dict[str, Any]:...
+    # Line: def to_dict(self) -> Dict[str, Any]:
     def to_dict(self) -> Dict[str, Any]:
-        # Return the final computed result to the caller
+        # Explain this line: return {...
+        # Line: return {
         return {
-            # Execute this line of logic to process the data
+            # Explain this line: "access_token": self.access_token,...
+            # Line: "access_token": self.access_token,
             "access_token": self.access_token,
-            # Execute this line of logic to process the data
+            # Explain this line: "token_type": self.token_type,...
+            # Line: "token_type": self.token_type,
             "token_type": self.token_type,
-            # Execute this line of logic to process the data
+            # Explain this line: "expires_in": self.expires_in,...
+            # Line: "expires_in": self.expires_in,
             "expires_in": self.expires_in,
-            # Execute this line of logic to process the data
+            # Explain this line: "expires_at": self.expires_at,...
+            # Line: "expires_at": self.expires_at,
             "expires_at": self.expires_at,
-            # Execute this line of logic to process the data
+            # Explain this line: "refresh_token": self.refresh_token,...
+            # Line: "refresh_token": self.refresh_token,
             "refresh_token": self.refresh_token,
-            # Execute this line of logic to process the data
+            # Explain this line: "scope": self.scope,...
+            # Line: "scope": self.scope,
             "scope": self.scope,
-        # Execute this line of logic to process the data
+        # Explain this line: }...
+        # Line: }
         }
 
 
 # ---------------------------------------------------------------------------
 # HARDENED SECURITY & VALIDATION HELPERS
 # ---------------------------------------------------------------------------
-# Define a new function or method
+# Explain this line: def validate_and_normalize_redirect_uri(...
+# Line: def validate_and_normalize_redirect_uri(uri: str)
 def validate_and_normalize_redirect_uri(uri: str) -> str:
     """
-    # Execute this line of logic to process the data
     Validates and standardizes redirect_uri according to Schwab's Developer Portal rules:
-      # Execute this line of logic to process the data
       1. Must be a non-empty string.
-      # Execute this line of logic to process the data
       2. Must not exceed Schwab's maximum 255-character ceiling.
-      # Execute this line of logic to process the data
       3. Must not contain whitespace characters.
-      # Execute this line of logic to process the data
       4. Must declare a secure scheme ('https') as required by LMS.
-      # Execute this line of logic to process the data
       5. Normalizes bare root paths (e.g., 'https://127.0.0.1/' -> 'https://127.0.0.1')
-         # Execute this line of logic to process the data
          to prevent string-mismatch errors during token exchange.
     """
-    # Check a conditional statement
+    # Explain this line: if not uri or not isinstance(uri, str):...
+    # Line: if not uri or not isinstance(uri, str):
     if not uri or not isinstance(uri, str):
-        # Raise an error to stop execution
+        # Explain this line: raise CallbackURLError("redirect_uri mus...
+        # Line: raise CallbackURLError("redirect_uri must be a non
         raise CallbackURLError("redirect_uri must be a non-empty string.")
 
-    # Assign a value or initialize a variable
+    # Explain this line: cleaned = uri.strip()...
+    # Line: cleaned = uri.strip()
     cleaned = uri.strip()
 
-    # Check a conditional statement
+    # Explain this line: if len(cleaned) > 255:...
+    # Line: if len(cleaned) > 255:
     if len(cleaned) > 255:
-        # Raise an error to stop execution
+        # Explain this line: raise CallbackURLError(...
+        # Line: raise CallbackURLError(
         raise CallbackURLError(
-            # Execute this line of logic to process the data
+            # Explain this line: f"redirect_uri exceeds Schwab's 255-char...
+            # Line: f"redirect_uri exceeds Schwab's 255-character ceil
             f"redirect_uri exceeds Schwab's 255-character ceiling ({len(cleaned)} chars): '{cleaned}'"
-        # Execute this line of logic to process the data
+        # Explain this line: )...
+        # Line: )
         )
 
-    # Check a conditional statement
+    # Explain this line: if any(c.isspace() for c in cleaned):...
+    # Line: if any(c.isspace() for c in cleaned):
     if any(c.isspace() for c in cleaned):
-        # Raise an error to stop execution
+        # Explain this line: raise CallbackURLError(f"redirect_uri co...
+        # Line: raise CallbackURLError(f"redirect_uri contains ill
         raise CallbackURLError(f"redirect_uri contains illegal whitespace characters: '{cleaned}'")
 
-    # Assign a value or initialize a variable
+    # Explain this line: parsed = urllib.parse.urlparse(cleaned)...
+    # Line: parsed = urllib.parse.urlparse(cleaned)
     parsed = urllib.parse.urlparse(cleaned)
 
-    # Check a conditional statement
+    # Explain this line: if parsed.scheme.lower() != "https":...
+    # Line: if parsed.scheme.lower() != "https":
     if parsed.scheme.lower() != "https":
-        # Raise an error to stop execution
+        # Explain this line: raise CallbackURLError(...
+        # Line: raise CallbackURLError(
         raise CallbackURLError(
-            # Execute this line of logic to process the data
+            # Explain this line: f"Invalid scheme '{parsed.scheme}' in re...
+            # Line: f"Invalid scheme '{parsed.scheme}' in redirect_uri
             f"Invalid scheme '{parsed.scheme}' in redirect_uri '{cleaned}'. "
-            # Execute this line of logic to process the data
+            # Explain this line: "Schwab Developer Portal requirements ma...
+            # Line: "Schwab Developer Portal requirements mandate the
             "Schwab Developer Portal requirements mandate the 'https://' scheme."
-        # Execute this line of logic to process the data
+        # Explain this line: )...
+        # Line: )
         )
 
-    # Check a conditional statement
+    # Explain this line: if parsed.path == "/" and not parsed.que...
+    # Line: if parsed.path == "/" and not parsed.query and not
     if parsed.path == "/" and not parsed.query and not parsed.fragment:
-        # Assign a value or initialize a variable
+        # Explain this line: cleaned = f"{parsed.scheme}://{parsed.ne...
+        # Line: cleaned = f"{parsed.scheme}://{parsed.netloc}"
         cleaned = f"{parsed.scheme}://{parsed.netloc}"
 
-    # Return the final computed result to the caller
+    # Explain this line: return cleaned...
+    # Line: return cleaned
     return cleaned
 
 
-# Define a new function or method
+# Explain this line: def _atomic_write_secure_json(target_pat...
+# Line: def _atomic_write_secure_json(target_path: Path, d
 def _atomic_write_secure_json(target_path: Path, data: Dict[str, Any]) -> None:
     """
-    # Execute this line of logic to process the data
     Atomically writes JSON payload to disk with POSIX 0o600 permissions.
-    # Execute this line of logic to process the data
     Eliminates the umask vulnerability window using low-level os.open before writing.
     """
-    # Assign a value or initialize a variable
+    # Explain this line: target_path.parent.mkdir(parents=True, e...
+    # Line: target_path.parent.mkdir(parents=True, exist_ok=Tr
     target_path.parent.mkdir(parents=True, exist_ok=True)
-    # Assign a value or initialize a variable
+    # Explain this line: tmp_path = target_path.with_name(f"{targ...
+    # Line: tmp_path = target_path.with_name(f"{target_path.na
     tmp_path = target_path.with_name(f"{target_path.name}.tmp.{os.getpid()}_{threading.get_ident()}")
 
-    # Assign a value or initialize a variable
+    # Explain this line: flags = os.O_WRONLY | os.O_CREAT | os.O_...
+    # Line: flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    # Check a conditional statement
+    # Explain this line: if hasattr(os, "O_NOFOLLOW"):...
+    # Line: if hasattr(os, "O_NOFOLLOW"):
     if hasattr(os, "O_NOFOLLOW"):
-        # Assign a value or initialize a variable
+        # Explain this line: flags |= os.O_NOFOLLOW...
+        # Line: flags |= os.O_NOFOLLOW
         flags |= os.O_NOFOLLOW
 
-    # Assign a value or initialize a variable
+    # Explain this line: fd = os.open(tmp_path, flags, 0o600)...
+    # Line: fd = os.open(tmp_path, flags, 0o600)
     fd = os.open(tmp_path, flags, 0o600)
-    # Start a try-catch block to handle potential errors
+    # Explain this line: try:...
+    # Line: try:
     try:
-        # Assign a value or initialize a variable
+        # Explain this line: with open(fd, "w", encoding="utf-8", clo...
+        # Line: with open(fd, "w", encoding="utf-8", closefd=True)
         with open(fd, "w", encoding="utf-8", closefd=True) as f:
-            # Assign a value or initialize a variable
+            # Explain this line: json.dump(data, f, indent=4)...
+            # Line: json.dump(data, f, indent=4)
             json.dump(data, f, indent=4)
-            # Execute this line of logic to process the data
+            # Explain this line: f.flush()...
+            # Line: f.flush()
             f.flush()
-            # Execute this line of logic to process the data
+            # Explain this line: os.fsync(f.fileno())...
+            # Line: os.fsync(f.fileno())
             os.fsync(f.fileno())
-    # Catch and handle an exception
+    # Explain this line: except Exception:...
+    # Line: except Exception:
     except Exception:
-        # Check a conditional statement
+        # Explain this line: if tmp_path.exists():...
+        # Line: if tmp_path.exists():
         if tmp_path.exists():
-            # Execute this line of logic to process the data
+            # Explain this line: tmp_path.unlink()...
+            # Line: tmp_path.unlink()
             tmp_path.unlink()
-        # Execute this line of logic to process the data
+        # Explain this line: raise...
+        # Line: raise
         raise
 
-    # Execute this line of logic to process the data
+    # Explain this line: os.replace(tmp_path, target_path)...
+    # Line: os.replace(tmp_path, target_path)
     os.replace(tmp_path, target_path)
 
 
-# Define a new function or method
+# Explain this line: def _safe_json_parse(resp: Response) -> ...
+# Line: def _safe_json_parse(resp: Response) -> Dict[str,
 def _safe_json_parse(resp: Response) -> Dict[str, Any]:
     """Safely extracts JSON payload without leaking internal gateway tokens on error."""
-    # Start a try-catch block to handle potential errors
+    # Explain this line: try:...
+    # Line: try:
     try:
-        # Return the final computed result to the caller
+        # Explain this line: return resp.json()...
+        # Line: return resp.json()
         return resp.json()
-    # Catch and handle an exception
+    # Explain this line: except ValueError as exc:...
+    # Line: except ValueError as exc:
     except ValueError as exc:
-        # Assign a value or initialize a variable
+        # Explain this line: correl_id = resp.headers.get("Schwab-Cli...
+        # Line: correl_id = resp.headers.get("Schwab-Client-Correl
         correl_id = resp.headers.get("Schwab-Client-CorrelId", "UNKNOWN")
-        # Raise an error to stop execution
+        # Explain this line: raise APIRequestError(...
+        # Line: raise APIRequestError(
         raise APIRequestError(
-            # Execute this line of logic to process the data
+            # Explain this line: f"Invalid JSON returned from endpoint (H...
+            # Line: f"Invalid JSON returned from endpoint (HTTP {resp.
             f"Invalid JSON returned from endpoint (HTTP {resp.status_code}). CorrelId: {correl_id}",
-            # Assign a value or initialize a variable
+            # Explain this line: status_code=resp.status_code,...
+            # Line: status_code=resp.status_code,
             status_code=resp.status_code,
-            # Assign a value or initialize a variable
+            # Explain this line: correl_id=correl_id,...
+            # Line: correl_id=correl_id,
             correl_id=correl_id,
-        # Execute this line of logic to process the data
+        # Explain this line: ) from exc...
+        # Line: ) from exc
         ) from exc
 
 
-# Define a new function or method
+# Explain this line: def _parse_schwab_error(resp: Response) ...
+# Line: def _parse_schwab_error(resp: Response) -> str:
 def _parse_schwab_error(resp: Response) -> str:
     """
-    # Execute this line of logic to process the data
     Extracts detailed diagnostics from Schwab's structured JSON error schema:
-    # Execute this line of logic to process the data
     {"errors": [{"status": 400, "title": "Bad Request", "detail": "...", "id": "guid"}]}
-    # Execute this line of logic to process the data
     Falls back to sanitized raw text if payload does not match schema.
     """
-    # Start a try-catch block to handle potential errors
+    # Explain this line: try:...
+    # Line: try:
     try:
-        # Assign a value or initialize a variable
+        # Explain this line: data = resp.json()...
+        # Line: data = resp.json()
         data = resp.json()
-        # Check a conditional statement
+        # Explain this line: if isinstance(data, dict) and "errors" i...
+        # Line: if isinstance(data, dict) and "errors" in data and
         if isinstance(data, dict) and "errors" in data and isinstance(data["errors"], list):
-            # Assign a value or initialize a variable
+            # Explain this line: messages = []...
+            # Line: messages = []
             messages = []
-            # Start a loop over the given collection
+            # Explain this line: for err in data["errors"]:...
+            # Line: for err in data["errors"]:
             for err in data["errors"]:
-                # Check a conditional statement
+                # Explain this line: if isinstance(err, dict):...
+                # Line: if isinstance(err, dict):
                 if isinstance(err, dict):
-                    # Assign a value or initialize a variable
+                    # Explain this line: title = err.get("title", "")...
+                    # Line: title = err.get("title", "")
                     title = err.get("title", "")
-                    # Assign a value or initialize a variable
+                    # Explain this line: detail = err.get("detail", "")...
+                    # Line: detail = err.get("detail", "")
                     detail = err.get("detail", "")
-                    # Assign a value or initialize a variable
+                    # Explain this line: err_id = err.get("id", "")...
+                    # Line: err_id = err.get("id", "")
                     err_id = err.get("id", "")
-                    # Assign a value or initialize a variable
+                    # Explain this line: elements = [e for e in (title, detail) i...
+                    # Line: elements = [e for e in (title, detail) if e]
                     elements = [e for e in (title, detail) if e]
-                    # Assign a value or initialize a variable
+                    # Explain this line: msg = ": ".join(elements) if elements el...
+                    # Line: msg = ": ".join(elements) if elements else "Unspec
                     msg = ": ".join(elements) if elements else "Unspecified Schwab error"
-                    # Check a conditional statement
+                    # Explain this line: if err_id:...
+                    # Line: if err_id:
                     if err_id:
-                        # Assign a value or initialize a variable
+                        # Explain this line: msg += f" (Error ID: {err_id})"...
+                        # Line: msg += f" (Error ID: {err_id})"
                         msg += f" (Error ID: {err_id})"
-                    # Execute this line of logic to process the data
+                    # Explain this line: messages.append(msg)...
+                    # Line: messages.append(msg)
                     messages.append(msg)
-            # Check a conditional statement
+            # Explain this line: if messages:...
+            # Line: if messages:
             if messages:
-                # Return the final computed result to the caller
+                # Explain this line: return " | ".join(messages)...
+                # Line: return " | ".join(messages)
                 return " | ".join(messages)
-    # Catch and handle an exception
+    # Explain this line: except Exception:...
+    # Line: except Exception:
     except Exception:
-        # Execute this line of logic to process the data
+        # Explain this line: pass...
+        # Line: pass
         pass
 
-    # Return the final computed result to the caller
+    # Explain this line: return resp.text.strip()[:300] if resp.t...
+    # Line: return resp.text.strip()[:300] if resp.text else "
     return resp.text.strip()[:300] if resp.text else "No error payload returned by gateway."
 
 
-# Define a new function or method
+# Explain this line: def _parse_retry_after(header_val: Optio...
+# Line: def _parse_retry_after(header_val: Optional[str],
 def _parse_retry_after(header_val: Optional[str], default_wait: float) -> float:
     """Parses RFC-7231 or integer seconds from HTTP Retry-After headers."""
-    # Check a conditional statement
+    # Explain this line: if not header_val:...
+    # Line: if not header_val:
     if not header_val:
-        # Return the final computed result to the caller
+        # Explain this line: return default_wait...
+        # Line: return default_wait
         return default_wait
-    # Start a try-catch block to handle potential errors
+    # Explain this line: try:...
+    # Line: try:
     try:
-        # Return the final computed result to the caller
+        # Explain this line: return max(0.0, float(header_val))...
+        # Line: return max(0.0, float(header_val))
         return max(0.0, float(header_val))
-    # Catch and handle an exception
+    # Explain this line: except ValueError:...
+    # Line: except ValueError:
     except ValueError:
-        # Execute this line of logic to process the data
+        # Explain this line: pass...
+        # Line: pass
         pass
-    # Start a try-catch block to handle potential errors
+    # Explain this line: try:...
+    # Line: try:
     try:
-        # Assign a value or initialize a variable
+        # Explain this line: date_tuple = email.utils.parsedate_tz(he...
+        # Line: date_tuple = email.utils.parsedate_tz(header_val)
         date_tuple = email.utils.parsedate_tz(header_val)
-        # Check a conditional statement
+        # Explain this line: if date_tuple:...
+        # Line: if date_tuple:
         if date_tuple:
-            # Assign a value or initialize a variable
+            # Explain this line: target_time = email.utils.mktime_tz(date...
+            # Line: target_time = email.utils.mktime_tz(date_tuple)
             target_time = email.utils.mktime_tz(date_tuple)
-            # Return the final computed result to the caller
+            # Explain this line: return max(0.0, target_time - time.time(...
+            # Line: return max(0.0, target_time - time.time())
             return max(0.0, target_time - time.time())
-    # Catch and handle an exception
+    # Explain this line: except Exception:...
+    # Line: except Exception:
     except Exception:
-        # Execute this line of logic to process the data
+        # Explain this line: pass...
+        # Line: pass
         pass
-    # Return the final computed result to the caller
+    # Explain this line: return default_wait...
+    # Line: return default_wait
     return default_wait
 
 
 # ---------------------------------------------------------------------------
 # CLIENT IMPLEMENTATION
 # ---------------------------------------------------------------------------
-# Define a new data structure or class
+# Explain this line: class SchwabClient:...
+# Line: class SchwabClient:
 class SchwabClient:
     """
-    # Execute this line of logic to process the data
     Thread-safe, institutional-grade market data client for Charles Schwab.
-    # Execute this line of logic to process the data
     Handles automated token persistence, proactive background refresh, and endpoint queries.
     """
 
-    # Define a new function or method
+    # Explain this line: def __init__(...
+    # Line: def __init__(
     def __init__(
-        # Execute this line of logic to process the data
+        # Explain this line: self,...
+        # Line: self,
         self,
-        # Assign a value or initialize a variable
+        # Explain this line: client_id: Optional[str] = None,...
+        # Line: client_id: Optional[str] = None,
         client_id: Optional[str] = None,
-        # Assign a value or initialize a variable
+        # Explain this line: client_secret: Optional[str] = None,...
+        # Line: client_secret: Optional[str] = None,
         client_secret: Optional[str] = None,
-        # Assign a value or initialize a variable
+        # Explain this line: redirect_uri: Optional[str] = None,...
+        # Line: redirect_uri: Optional[str] = None,
         redirect_uri: Optional[str] = None,
-        # Assign a value or initialize a variable
+        # Explain this line: token_file_path: Optional[Union[str, Pat...
+        # Line: token_file_path: Optional[Union[str, Path]] = None
         token_file_path: Optional[Union[str, Path]] = None,
-        # Assign a value or initialize a variable
+        # Explain this line: session: Optional[Session] = None,...
+        # Line: session: Optional[Session] = None,
         session: Optional[Session] = None,
-        # Assign a value or initialize a variable
+        # Explain this line: timeout: Tuple[float, float] = DEFAULT_T...
+        # Line: timeout: Tuple[float, float] = DEFAULT_TIMEOUT,
         timeout: Tuple[float, float] = DEFAULT_TIMEOUT,
-        # Assign a value or initialize a variable
+        # Explain this line: max_retries: int = DEFAULT_RETRIES,...
+        # Line: max_retries: int = DEFAULT_RETRIES,
         max_retries: int = DEFAULT_RETRIES,
-        # Assign a value or initialize a variable
+        # Explain this line: pool_connections: int = 50,...
+        # Line: pool_connections: int = 50,
         pool_connections: int = 50,
-        # Assign a value or initialize a variable
+        # Explain this line: pool_maxsize: int = 50,...
+        # Line: pool_maxsize: int = 50,
         pool_maxsize: int = 50,
-    # Execute this line of logic to process the data
+    # Explain this line: ) -> None:...
+    # Line: ) -> None:
     ) -> None:
-        # Assign a value or initialize a variable
+        # Explain this line: self.client_id = (client_id or os.enviro...
+        # Line: self.client_id = (client_id or os.environ.get("SCH
         self.client_id = (client_id or os.environ.get("SCHWAB_CLIENT_ID", "")).strip()
-        # Assign a value or initialize a variable
+        # Explain this line: self.client_secret = (client_secret or o...
+        # Line: self.client_secret = (client_secret or os.environ.
         self.client_secret = (client_secret or os.environ.get("SCHWAB_CLIENT_SECRET", "")).strip()
 
-        # Assign a value or initialize a variable
+        # Explain this line: raw_redirect = (redirect_uri or os.envir...
+        # Line: raw_redirect = (redirect_uri or os.environ.get("SC
         raw_redirect = (redirect_uri or os.environ.get("SCHWAB_REDIRECT_URI", "https://127.0.0.1")).strip()
-        # Assign a value or initialize a variable
+        # Explain this line: self.redirect_uri = validate_and_normali...
+        # Line: self.redirect_uri = validate_and_normalize_redirec
         self.redirect_uri = validate_and_normalize_redirect_uri(raw_redirect)
 
-        # Assign a value or initialize a variable
+        # Explain this line: raw_token_path = token_file_path or os.e...
+        # Line: raw_token_path = token_file_path or os.environ.get
         raw_token_path = token_file_path or os.environ.get("SCHWAB_TOKEN_PATH", "schwab_tokens.json")
-        # Assign a value or initialize a variable
+        # Explain this line: self.token_file_path = Path(raw_token_pa...
+        # Line: self.token_file_path = Path(raw_token_path).resolv
         self.token_file_path = Path(raw_token_path).resolve()
 
-        # Check a conditional statement
+        # Explain this line: if not self.client_id:...
+        # Line: if not self.client_id:
         if not self.client_id:
-            # Raise an error to stop execution
+            # Explain this line: raise ValueError("Configuration missing:...
+            # Line: raise ValueError("Configuration missing: SCHWAB_CL
             raise ValueError("Configuration missing: SCHWAB_CLIENT_ID must be provided.")
 
-        # Assign a value or initialize a variable
+        # Explain this line: self.timeout = timeout...
+        # Line: self.timeout = timeout
         self.timeout = timeout
-        # Assign a value or initialize a variable
+        # Explain this line: self.max_retries = max(0, max_retries)...
+        # Line: self.max_retries = max(0, max_retries)
         self.max_retries = max(0, max_retries)
 
         # Thread synchronization primitives
-        # Assign a value or initialize a variable
+        # Explain this line: self._tokens_lock = threading.RLock()...
+        # Line: self._tokens_lock = threading.RLock()
         self._tokens_lock = threading.RLock()
-        # Assign a value or initialize a variable
+        # Explain this line: self._token_payload: Optional[TokenPaylo...
+        # Line: self._token_payload: Optional[TokenPayload] = None
         self._token_payload: Optional[TokenPayload] = None
 
         # Build resilient connection pool
-        # Check a conditional statement
+        # Explain this line: if session:...
+        # Line: if session:
         if session:
-            # Assign a value or initialize a variable
+            # Explain this line: self.session = session...
+            # Line: self.session = session
             self.session = session
-        # Execute this line of logic to process the data
+        # Explain this line: else:...
+        # Line: else:
         else:
-            # Assign a value or initialize a variable
+            # Explain this line: self.session = requests.Session()...
+            # Line: self.session = requests.Session()
             self.session = requests.Session()
-            # Assign a value or initialize a variable
+            # Explain this line: adapter = HTTPAdapter(...
+            # Line: adapter = HTTPAdapter(
             adapter = HTTPAdapter(
-                # Assign a value or initialize a variable
+                # Explain this line: pool_connections=pool_connections,...
+                # Line: pool_connections=pool_connections,
                 pool_connections=pool_connections,
-                # Assign a value or initialize a variable
+                # Explain this line: pool_maxsize=pool_maxsize,...
+                # Line: pool_maxsize=pool_maxsize,
                 pool_maxsize=pool_maxsize,
-                # Assign a value or initialize a variable
+                # Explain this line: max_retries=Retry(total=0),  # Handled v...
+                # Line: max_retries=Retry(total=0),  # Handled via custom
                 max_retries=Retry(total=0),  # Handled via custom exponential backoff engine
-            # Execute this line of logic to process the data
+            # Explain this line: )...
+            # Line: )
             )
-            # Execute this line of logic to process the data
+            # Explain this line: self.session.mount("https://", adapter)...
+            # Line: self.session.mount("https://", adapter)
             self.session.mount("https://", adapter)
 
-        # Execute this line of logic to process the data
+        # Explain this line: self._load_tokens_from_disk()...
+        # Line: self._load_tokens_from_disk()
         self._load_tokens_from_disk()
 
     # -----------------------------------------------------------------------
     # TOKEN PERSISTENCE & CONCURRENCY
     # -----------------------------------------------------------------------
-    # Define a new function or method
+    # Explain this line: def _load_tokens_from_disk(self) -> None...
+    # Line: def _load_tokens_from_disk(self) -> None:
     def _load_tokens_from_disk(self) -> None:
         """Loads cached tokens into memory under thread lock."""
-        # Execute this line of logic to process the data
+        # Explain this line: with self._tokens_lock:...
+        # Line: with self._tokens_lock:
         with self._tokens_lock:
-            # Check a conditional statement
+            # Explain this line: if not self.token_file_path.exists():...
+            # Line: if not self.token_file_path.exists():
             if not self.token_file_path.exists():
-                # Assign a value or initialize a variable
+                # Explain this line: self._token_payload = None...
+                # Line: self._token_payload = None
                 self._token_payload = None
-                # Execute this line of logic to process the data
+                # Explain this line: return...
+                # Line: return
                 return
 
-            # Start a try-catch block to handle potential errors
+            # Explain this line: try:...
+            # Line: try:
             try:
-                # Assign a value or initialize a variable
+                # Explain this line: with self.token_file_path.open("r", enco...
+                # Line: with self.token_file_path.open("r", encoding="utf-
                 with self.token_file_path.open("r", encoding="utf-8") as f:
-                    # Assign a value or initialize a variable
+                    # Explain this line: data = json.load(f)...
+                    # Line: data = json.load(f)
                     data = json.load(f)
-                # Check a conditional statement
+                # Explain this line: if "access_token" in data:...
+                # Line: if "access_token" in data:
                 if "access_token" in data:
-                    # Assign a value or initialize a variable
+                    # Explain this line: self._token_payload = TokenPayload.from_...
+                    # Line: self._token_payload = TokenPayload.from_dict(data)
                     self._token_payload = TokenPayload.from_dict(data)
-                # Execute this line of logic to process the data
+                # Explain this line: else:...
+                # Line: else:
                 else:
-                    # Assign a value or initialize a variable
+                    # Explain this line: self._token_payload = None...
+                    # Line: self._token_payload = None
                     self._token_payload = None
-            # Catch and handle an exception
+            # Explain this line: except Exception as exc:...
+            # Line: except Exception as exc:
             except Exception as exc:
-                # Log an important message or event
+                # Explain this line: logger.warning("Unreadable token store a...
+                # Line: logger.warning("Unreadable token store at %s: %s",
                 logger.warning("Unreadable token store at %s: %s", self.token_file_path, exc)
-                # Assign a value or initialize a variable
+                # Explain this line: self._token_payload = None...
+                # Line: self._token_payload = None
                 self._token_payload = None
 
-    # Define a new function or method
+    # Explain this line: def _persist_tokens(self, token_data: Di...
+    # Line: def _persist_tokens(self, token_data: Dict[str, An
     def _persist_tokens(self, token_data: Dict[str, Any]) -> TokenPayload:
         """Atomically caches new token sets to disk and updates in-memory reference."""
-        # Execute this line of logic to process the data
+        # Explain this line: with self._tokens_lock:...
+        # Line: with self._tokens_lock:
         with self._tokens_lock:
-            # Check a conditional statement
+            # Explain this line: if "refresh_token" not in token_data and...
+            # Line: if "refresh_token" not in token_data and self._tok
             if "refresh_token" not in token_data and self._token_payload and self._token_payload.refresh_token:
-                # Assign a value or initialize a variable
+                # Explain this line: token_data["refresh_token"] = self._toke...
+                # Line: token_data["refresh_token"] = self._token_payload.
                 token_data["refresh_token"] = self._token_payload.refresh_token
 
-            # Assign a value or initialize a variable
+            # Explain this line: expires_in = int(token_data.get("expires...
+            # Line: expires_in = int(token_data.get("expires_in", 1800
             expires_in = int(token_data.get("expires_in", 1800))
-            # Assign a value or initialize a variable
+            # Explain this line: token_data["expires_at"] = time.time() +...
+            # Line: token_data["expires_at"] = time.time() + expires_i
             token_data["expires_at"] = time.time() + expires_in
 
-            # Execute this line of logic to process the data
+            # Explain this line: _atomic_write_secure_json(self.token_fil...
+            # Line: _atomic_write_secure_json(self.token_file_path, to
             _atomic_write_secure_json(self.token_file_path, token_data)
-            # Assign a value or initialize a variable
+            # Explain this line: self._token_payload = TokenPayload.from_...
+            # Line: self._token_payload = TokenPayload.from_dict(token
             self._token_payload = TokenPayload.from_dict(token_data)
-            # Return the final computed result to the caller
+            # Explain this line: return self._token_payload...
+            # Line: return self._token_payload
             return self._token_payload
 
-    # Define a new function or method
+    # Explain this line: def _get_basic_auth_header(self) -> Dict...
+    # Line: def _get_basic_auth_header(self) -> Dict[str, str]
     def _get_basic_auth_header(self) -> Dict[str, str]:
         """Builds HTTP Basic Authorization header: 'Basic base64(client_id:client_secret)'."""
-        # Check a conditional statement
+        # Explain this line: if not self.client_secret:...
+        # Line: if not self.client_secret:
         if not self.client_secret:
-            # Raise an error to stop execution
+            # Explain this line: raise ValueError("Operation requires SCH...
+            # Line: raise ValueError("Operation requires SCHWAB_CLIENT
             raise ValueError("Operation requires SCHWAB_CLIENT_SECRET.")
-        # Assign a value or initialize a variable
+        # Explain this line: raw_creds = f"{self.client_id}:{self.cli...
+        # Line: raw_creds = f"{self.client_id}:{self.client_secret
         raw_creds = f"{self.client_id}:{self.client_secret}"
-        # Assign a value or initialize a variable
+        # Explain this line: encoded = base64.b64encode(raw_creds.enc...
+        # Line: encoded = base64.b64encode(raw_creds.encode("utf-8
         encoded = base64.b64encode(raw_creds.encode("utf-8")).decode("utf-8")
-        # Return the final computed result to the caller
+        # Explain this line: return {...
+        # Line: return {
         return {
-            # Execute this line of logic to process the data
+            # Explain this line: "Authorization": f"Basic {encoded}",...
+            # Line: "Authorization": f"Basic {encoded}",
             "Authorization": f"Basic {encoded}",
-            # Execute this line of logic to process the data
+            # Explain this line: "Content-Type": "application/x-www-form-...
+            # Line: "Content-Type": "application/x-www-form-urlencoded
             "Content-Type": "application/x-www-form-urlencoded",
-        # Execute this line of logic to process the data
+        # Explain this line: }...
+        # Line: }
         }
 
     # -----------------------------------------------------------------------
     # OAUTH TRANSACTIONS
     # -----------------------------------------------------------------------
-    # Define a new function or method
+    # Explain this line: def build_auth_url(self, state: Optional...
+    # Line: def build_auth_url(self, state: Optional[str] = No
     def build_auth_url(self, state: Optional[str] = None) -> str:
         """Constructs user consent URL with validated callback URI and optional CSRF state."""
-        # Assign a value or initialize a variable
+        # Explain this line: params = {...
+        # Line: params = {
         params = {
-            # Execute this line of logic to process the data
+            # Explain this line: "response_type": "code",...
+            # Line: "response_type": "code",
             "response_type": "code",
-            # Execute this line of logic to process the data
+            # Explain this line: "client_id": self.client_id,...
+            # Line: "client_id": self.client_id,
             "client_id": self.client_id,
-            # Execute this line of logic to process the data
+            # Explain this line: "redirect_uri": self.redirect_uri,...
+            # Line: "redirect_uri": self.redirect_uri,
             "redirect_uri": self.redirect_uri,
-            # Execute this line of logic to process the data
+            # Explain this line: "scope": "api",...
+            # Line: "scope": "api",
             "scope": "api",
-        # Execute this line of logic to process the data
+        # Explain this line: }...
+        # Line: }
         }
-        # Check a conditional statement
+        # Explain this line: if state:...
+        # Line: if state:
         if state:
-            # Assign a value or initialize a variable
+            # Explain this line: params["state"] = state...
+            # Line: params["state"] = state
             params["state"] = state
-        # Return the final computed result to the caller
+        # Explain this line: return f"{AUTH_URL}?{urllib.parse.urlenc...
+        # Line: return f"{AUTH_URL}?{urllib.parse.urlencode(params
         return f"{AUTH_URL}?{urllib.parse.urlencode(params)}"
 
-    # Define a new function or method
+    # Explain this line: def exchange_code_for_token(...
+    # Line: def exchange_code_for_token(
     def exchange_code_for_token(
-        # Execute this line of logic to process the data
+        # Explain this line: self,...
+        # Line: self,
         self,
-        # Execute this line of logic to process the data
+        # Explain this line: code_or_url: str,...
+        # Line: code_or_url: str,
         code_or_url: str,
-        # Assign a value or initialize a variable
+        # Explain this line: expected_state: Optional[str] = None,...
+        # Line: expected_state: Optional[str] = None,
         expected_state: Optional[str] = None,
-    # Execute this line of logic to process the data
+    # Explain this line: ) -> TokenPayload:...
+    # Line: ) -> TokenPayload:
     ) -> TokenPayload:
         """
-        # Execute this line of logic to process the data
         Exchanges the authorization code for access and refresh tokens.
-        # Execute this line of logic to process the data
         Validates the returned CSRF 'state' token if expected_state was supplied.
         """
-        # Assign a value or initialize a variable
+        # Explain this line: raw = code_or_url.strip()...
+        # Line: raw = code_or_url.strip()
         raw = code_or_url.strip()
-        # Assign a value or initialize a variable
+        # Explain this line: extracted_state = None...
+        # Line: extracted_state = None
         extracted_state = None
 
-        # Check a conditional statement
+        # Explain this line: if "code=" in raw:...
+        # Line: if "code=" in raw:
         if "code=" in raw:
-            # Assign a value or initialize a variable
+            # Explain this line: query = raw.split("?", 1)[-1] if "?" in ...
+            # Line: query = raw.split("?", 1)[-1] if "?" in raw else r
             query = raw.split("?", 1)[-1] if "?" in raw else raw
-            # Assign a value or initialize a variable
+            # Explain this line: parsed = urllib.parse.parse_qs(query)...
+            # Line: parsed = urllib.parse.parse_qs(query)
             parsed = urllib.parse.parse_qs(query)
-            # Assign a value or initialize a variable
+            # Explain this line: extracted_code = parsed.get("code", [Non...
+            # Line: extracted_code = parsed.get("code", [None])[0]
             extracted_code = parsed.get("code", [None])[0]
-            # Assign a value or initialize a variable
+            # Explain this line: extracted_state = parsed.get("state", [N...
+            # Line: extracted_state = parsed.get("state", [None])[0]
             extracted_state = parsed.get("state", [None])[0]
-            # Check a conditional statement
+            # Explain this line: if not extracted_code:...
+            # Line: if not extracted_code:
             if not extracted_code:
-                # Assign a value or initialize a variable
+                # Explain this line: extracted_code = raw.split("code=")[-1]....
+                # Line: extracted_code = raw.split("code=")[-1].split("&")
                 extracted_code = raw.split("code=")[-1].split("&")[0]
-        # Execute this line of logic to process the data
+        # Explain this line: else:...
+        # Line: else:
         else:
-            # Assign a value or initialize a variable
+            # Explain this line: extracted_code = raw...
+            # Line: extracted_code = raw
             extracted_code = raw
 
         # Cryptographic state verification (RFC 6749 Section 10.12)
-        # Check a conditional statement
+        # Explain this line: if expected_state:...
+        # Line: if expected_state:
         if expected_state:
-            # Check a conditional statement
+            # Explain this line: if not extracted_state:...
+            # Line: if not extracted_state:
             if not extracted_state:
-                # Raise an error to stop execution
+                # Explain this line: raise TokenError("Security Alert: Author...
+                # Line: raise TokenError("Security Alert: Authorization re
                 raise TokenError("Security Alert: Authorization response is missing the required 'state' parameter.")
-            # Check a conditional statement
+            # Explain this line: if extracted_state != expected_state:...
+            # Line: if extracted_state != expected_state:
             if extracted_state != expected_state:
-                # Raise an error to stop execution
+                # Explain this line: raise TokenError(...
+                # Line: raise TokenError(
                 raise TokenError(
-                    # Execute this line of logic to process the data
+                    # Explain this line: f"Security Alert: CSRF state mismatch de...
+                    # Line: f"Security Alert: CSRF state mismatch detected! Ex
                     f"Security Alert: CSRF state mismatch detected! Expected '{expected_state}', got '{extracted_state}'."
-                # Execute this line of logic to process the data
+                # Explain this line: )...
+                # Line: )
                 )
 
-        # Assign a value or initialize a variable
+        # Explain this line: sanitized_code = urllib.parse.unquote((e...
+        # Line: sanitized_code = urllib.parse.unquote((extracted_c
         sanitized_code = urllib.parse.unquote((extracted_code or "").strip())
-        # Check a conditional statement
+        # Explain this line: if not sanitized_code:...
+        # Line: if not sanitized_code:
         if not sanitized_code:
-            # Raise an error to stop execution
+            # Explain this line: raise TokenError("Failed to extract vali...
+            # Line: raise TokenError("Failed to extract valid authoriz
             raise TokenError("Failed to extract valid authorization code parameter.")
 
-        # Assign a value or initialize a variable
+        # Explain this line: payload = {...
+        # Line: payload = {
         payload = {
-            # Execute this line of logic to process the data
+            # Explain this line: "grant_type": "authorization_code",...
+            # Line: "grant_type": "authorization_code",
             "grant_type": "authorization_code",
-            # Execute this line of logic to process the data
+            # Explain this line: "code": sanitized_code,...
+            # Line: "code": sanitized_code,
             "code": sanitized_code,
-            # Execute this line of logic to process the data
+            # Explain this line: "redirect_uri": self.redirect_uri,...
+            # Line: "redirect_uri": self.redirect_uri,
             "redirect_uri": self.redirect_uri,
-        # Execute this line of logic to process the data
+        # Explain this line: }...
+        # Line: }
         }
 
-        # Assign a value or initialize a variable
+        # Explain this line: resp = self._raw_http_request("POST", TO...
+        # Line: resp = self._raw_http_request("POST", TOKEN_URL, h
         resp = self._raw_http_request("POST", TOKEN_URL, headers=self._get_basic_auth_header(), data=payload)
-        # Check a conditional statement
+        # Explain this line: if resp.status_code != 200:...
+        # Line: if resp.status_code != 200:
         if resp.status_code != 200:
-            # Assign a value or initialize a variable
+            # Explain this line: correl_id = resp.headers.get("Schwab-Cli...
+            # Line: correl_id = resp.headers.get("Schwab-Client-Correl
             correl_id = resp.headers.get("Schwab-Client-CorrelId", "UNKNOWN")
-            # Assign a value or initialize a variable
+            # Explain this line: err_msg = _parse_schwab_error(resp)...
+            # Line: err_msg = _parse_schwab_error(resp)
             err_msg = _parse_schwab_error(resp)
-            # Raise an error to stop execution
+            # Explain this line: raise TokenError(...
+            # Line: raise TokenError(
             raise TokenError(
-                # Execute this line of logic to process the data
+                # Explain this line: f"OAuth code exchange failed (HTTP {resp...
+                # Line: f"OAuth code exchange failed (HTTP {resp.status_co
                 f"OAuth code exchange failed (HTTP {resp.status_code}). CorrelId: {correl_id} | Details: {err_msg}"
-            # Execute this line of logic to process the data
+            # Explain this line: )...
+            # Line: )
             )
 
-        # Return the final computed result to the caller
+        # Explain this line: return self._persist_tokens(_safe_json_p...
+        # Line: return self._persist_tokens(_safe_json_parse(resp)
         return self._persist_tokens(_safe_json_parse(resp))
 
-    # Define a new function or method
+    # Explain this line: def refresh_access_token(self) -> TokenP...
+    # Line: def refresh_access_token(self) -> TokenPayload:
     def refresh_access_token(self) -> TokenPayload:
         """Executes a silent token refresh using double-checked thread synchronization."""
-        # Execute this line of logic to process the data
+        # Explain this line: with self._tokens_lock:...
+        # Line: with self._tokens_lock:
         with self._tokens_lock:
-            # Check a conditional statement
+            # Explain this line: if self._token_payload and time.time() <...
+            # Line: if self._token_payload and time.time() < (self._to
             if self._token_payload and time.time() < (self._token_payload.expires_at - TOKEN_EXPIRY_BUFFER):
-                # Return the final computed result to the caller
+                # Explain this line: return self._token_payload...
+                # Line: return self._token_payload
                 return self._token_payload
 
-            # Check a conditional statement
+            # Explain this line: if not self._token_payload or not self._...
+            # Line: if not self._token_payload or not self._token_payl
             if not self._token_payload or not self._token_payload.refresh_token:
-                # Raise an error to stop execution
+                # Explain this line: raise TokenError("No refresh token avail...
+                # Line: raise TokenError("No refresh token available. Inte
                 raise TokenError("No refresh token available. Interactive authorization required.")
 
-            # Assign a value or initialize a variable
+            # Explain this line: payload = {...
+            # Line: payload = {
             payload = {
-                # Execute this line of logic to process the data
+                # Explain this line: "grant_type": "refresh_token",...
+                # Line: "grant_type": "refresh_token",
                 "grant_type": "refresh_token",
-                # Execute this line of logic to process the data
+                # Explain this line: "refresh_token": self._token_payload.ref...
+                # Line: "refresh_token": self._token_payload.refresh_token
                 "refresh_token": self._token_payload.refresh_token,
-            # Execute this line of logic to process the data
+            # Explain this line: }...
+            # Line: }
             }
 
-            # Assign a value or initialize a variable
+            # Explain this line: resp = self._raw_http_request("POST", TO...
+            # Line: resp = self._raw_http_request("POST", TOKEN_URL, h
             resp = self._raw_http_request("POST", TOKEN_URL, headers=self._get_basic_auth_header(), data=payload)
-            # Check a conditional statement
+            # Explain this line: if resp.status_code != 200:...
+            # Line: if resp.status_code != 200:
             if resp.status_code != 200:
-                # Assign a value or initialize a variable
+                # Explain this line: correl_id = resp.headers.get("Schwab-Cli...
+                # Line: correl_id = resp.headers.get("Schwab-Client-Correl
                 correl_id = resp.headers.get("Schwab-Client-CorrelId", "UNKNOWN")
-                # Assign a value or initialize a variable
+                # Explain this line: err_msg = _parse_schwab_error(resp)...
+                # Line: err_msg = _parse_schwab_error(resp)
                 err_msg = _parse_schwab_error(resp)
-                # Raise an error to stop execution
+                # Explain this line: raise TokenError(...
+                # Line: raise TokenError(
                 raise TokenError(
-                    # Execute this line of logic to process the data
+                    # Explain this line: f"Refresh token rejected by Schwab (HTTP...
+                    # Line: f"Refresh token rejected by Schwab (HTTP {resp.sta
                     f"Refresh token rejected by Schwab (HTTP {resp.status_code}). "
-                    # Execute this line of logic to process the data
+                    # Explain this line: f"CorrelId: {correl_id} | Details: {err_...
+                    # Line: f"CorrelId: {correl_id} | Details: {err_msg}"
                     f"CorrelId: {correl_id} | Details: {err_msg}"
-                # Execute this line of logic to process the data
+                # Explain this line: )...
+                # Line: )
                 )
 
-            # Return the final computed result to the caller
+            # Explain this line: return self._persist_tokens(_safe_json_p...
+            # Line: return self._persist_tokens(_safe_json_parse(resp)
             return self._persist_tokens(_safe_json_parse(resp))
 
-    # Define a new function or method
+    # Explain this line: def get_valid_access_token(self) -> str:...
+    # Line: def get_valid_access_token(self) -> str:
     def get_valid_access_token(self) -> str:
         """Fast-path thread-safe retrieval of validated access token."""
-        # Assign a value or initialize a variable
+        # Explain this line: current = self._token_payload...
+        # Line: current = self._token_payload
         current = self._token_payload
-        # Check a conditional statement
+        # Explain this line: if current and time.time() < (current.ex...
+        # Line: if current and time.time() < (current.expires_at -
         if current and time.time() < (current.expires_at - TOKEN_EXPIRY_BUFFER):
-            # Return the final computed result to the caller
+            # Explain this line: return current.access_token...
+            # Line: return current.access_token
             return current.access_token
 
-        # Return the final computed result to the caller
+        # Explain this line: return self.refresh_access_token().acces...
+        # Line: return self.refresh_access_token().access_token
         return self.refresh_access_token().access_token
 
     # -----------------------------------------------------------------------
     # RESILIENT HTTP EXECUTION ENGINE
     # -----------------------------------------------------------------------
-    # Define a new function or method
+    # Explain this line: def _raw_http_request(...
+    # Line: def _raw_http_request(
     def _raw_http_request(
-        # Execute this line of logic to process the data
+        # Explain this line: self,...
+        # Line: self,
         self,
-        # Execute this line of logic to process the data
+        # Explain this line: method: str,...
+        # Line: method: str,
         method: str,
-        # Execute this line of logic to process the data
+        # Explain this line: url: str,...
+        # Line: url: str,
         url: str,
-        # Assign a value or initialize a variable
+        # Explain this line: headers: Optional[Dict[str, str]] = None...
+        # Line: headers: Optional[Dict[str, str]] = None,
         headers: Optional[Dict[str, str]] = None,
-        # Assign a value or initialize a variable
+        # Explain this line: params: Optional[Dict[str, Any]] = None,...
+        # Line: params: Optional[Dict[str, Any]] = None,
         params: Optional[Dict[str, Any]] = None,
-        # Assign a value or initialize a variable
+        # Explain this line: data: Optional[Dict[str, Any]] = None,...
+        # Line: data: Optional[Dict[str, Any]] = None,
         data: Optional[Dict[str, Any]] = None,
-    # Execute this line of logic to process the data
+    # Explain this line: ) -> Response:...
+    # Line: ) -> Response:
     ) -> Response:
         """Executes raw HTTP calls with entropy-jittered exponential backoff and 429 adherence."""
-        # Assign a value or initialize a variable
+        # Explain this line: attempt = 0...
+        # Line: attempt = 0
         attempt = 0
-        # Execute this line of logic to process the data
+        # Explain this line: while True:...
+        # Line: while True:
         while True:
-            # Assign a value or initialize a variable
+            # Explain this line: attempt += 1...
+            # Line: attempt += 1
             attempt += 1
-            # Start a try-catch block to handle potential errors
+            # Explain this line: try:...
+            # Line: try:
             try:
-                # Assign a value or initialize a variable
+                # Explain this line: resp = self.session.request(...
+                # Line: resp = self.session.request(
                 resp = self.session.request(
-                    # Assign a value or initialize a variable
+                    # Explain this line: method=method,...
+                    # Line: method=method,
                     method=method,
-                    # Assign a value or initialize a variable
+                    # Explain this line: url=url,...
+                    # Line: url=url,
                     url=url,
-                    # Assign a value or initialize a variable
+                    # Explain this line: headers=headers,...
+                    # Line: headers=headers,
                     headers=headers,
-                    # Assign a value or initialize a variable
+                    # Explain this line: params=params,...
+                    # Line: params=params,
                     params=params,
-                    # Assign a value or initialize a variable
+                    # Explain this line: data=data,...
+                    # Line: data=data,
                     data=data,
-                    # Assign a value or initialize a variable
+                    # Explain this line: timeout=self.timeout,...
+                    # Line: timeout=self.timeout,
                     timeout=self.timeout,
-                # Execute this line of logic to process the data
+                # Explain this line: )...
+                # Line: )
                 )
-            # Catch and handle an exception
+            # Explain this line: except requests.RequestException as err:...
+            # Line: except requests.RequestException as err:
             except requests.RequestException as err:
-                # Check a conditional statement
+                # Explain this line: if attempt > self.max_retries:...
+                # Line: if attempt > self.max_retries:
                 if attempt > self.max_retries:
-                    # Raise an error to stop execution
+                    # Explain this line: raise APIRequestError(f"Network transpor...
+                    # Line: raise APIRequestError(f"Network transport failure
                     raise APIRequestError(f"Network transport failure after {attempt} attempts: {err}") from err
-                # Assign a value or initialize a variable
+                # Explain this line: backoff = DEFAULT_BACKOFF_FACTOR * (2 **...
+                # Line: backoff = DEFAULT_BACKOFF_FACTOR * (2 ** (attempt
                 backoff = DEFAULT_BACKOFF_FACTOR * (2 ** (attempt - 1))
-                # Execute this line of logic to process the data
+                # Explain this line: time.sleep(backoff + (time.time() % 0.2)...
+                # Line: time.sleep(backoff + (time.time() % 0.2))
                 time.sleep(backoff + (time.time() % 0.2))
-                # Execute this line of logic to process the data
+                # Explain this line: continue...
+                # Line: continue
                 continue
 
             # Handle rate limiting
-            # Check a conditional statement
+            # Explain this line: if resp.status_code == 429:...
+            # Line: if resp.status_code == 429:
             if resp.status_code == 429:
-                # Assign a value or initialize a variable
+                # Explain this line: correl_id = resp.headers.get("Schwab-Cli...
+                # Line: correl_id = resp.headers.get("Schwab-Client-Correl
                 correl_id = resp.headers.get("Schwab-Client-CorrelId", "UNKNOWN")
-                # Assign a value or initialize a variable
+                # Explain this line: wait_time = _parse_retry_after(...
+                # Line: wait_time = _parse_retry_after(
                 wait_time = _parse_retry_after(
-                    # Execute this line of logic to process the data
+                    # Explain this line: resp.headers.get("Retry-After"),...
+                    # Line: resp.headers.get("Retry-After"),
                     resp.headers.get("Retry-After"),
-                    # Execute this line of logic to process the data
+                    # Explain this line: DEFAULT_BACKOFF_FACTOR * (2 ** (attempt ...
+                    # Line: DEFAULT_BACKOFF_FACTOR * (2 ** (attempt - 1)),
                     DEFAULT_BACKOFF_FACTOR * (2 ** (attempt - 1)),
-                # Execute this line of logic to process the data
+                # Explain this line: )...
+                # Line: )
                 )
-                # Log an important message or event
+                # Explain this line: logger.warning(...
+                # Line: logger.warning(
                 logger.warning(
-                    # Execute this line of logic to process the data
+                    # Explain this line: "Schwab rate limit triggered (CorrelId: ...
+                    # Line: "Schwab rate limit triggered (CorrelId: %s). Backi
                     "Schwab rate limit triggered (CorrelId: %s). Backing off for %.2f seconds.",
-                    # Execute this line of logic to process the data
+                    # Explain this line: correl_id,...
+                    # Line: correl_id,
                     correl_id,
-                    # Execute this line of logic to process the data
+                    # Explain this line: wait_time,...
+                    # Line: wait_time,
                     wait_time,
-                # Execute this line of logic to process the data
+                # Explain this line: )...
+                # Line: )
                 )
-                # Check a conditional statement
+                # Explain this line: if attempt > self.max_retries:...
+                # Line: if attempt > self.max_retries:
                 if attempt > self.max_retries:
-                    # Raise an error to stop execution
+                    # Explain this line: raise APIRequestError(...
+                    # Line: raise APIRequestError(
                     raise APIRequestError(
-                        # Execute this line of logic to process the data
+                        # Explain this line: f"Exceeded maximum retries on HTTP 429 R...
+                        # Line: f"Exceeded maximum retries on HTTP 429 Rate Limit.
                         f"Exceeded maximum retries on HTTP 429 Rate Limit. CorrelId: {correl_id}",
-                        # Assign a value or initialize a variable
+                        # Explain this line: status_code=429,...
+                        # Line: status_code=429,
                         status_code=429,
-                        # Assign a value or initialize a variable
+                        # Explain this line: correl_id=correl_id,...
+                        # Line: correl_id=correl_id,
                         correl_id=correl_id,
-                    # Execute this line of logic to process the data
+                    # Explain this line: )...
+                    # Line: )
                     )
-                # Execute this line of logic to process the data
+                # Explain this line: time.sleep(wait_time)...
+                # Line: time.sleep(wait_time)
                 time.sleep(wait_time)
-                # Execute this line of logic to process the data
+                # Explain this line: continue...
+                # Line: continue
                 continue
 
             # Retry transient server errors
-            # Check a conditional statement
+            # Explain this line: if 500 <= resp.status_code < 600:...
+            # Line: if 500 <= resp.status_code < 600:
             if 500 <= resp.status_code < 600:
-                # Assign a value or initialize a variable
+                # Explain this line: correl_id = resp.headers.get("Schwab-Cli...
+                # Line: correl_id = resp.headers.get("Schwab-Client-Correl
                 correl_id = resp.headers.get("Schwab-Client-CorrelId", "UNKNOWN")
-                # Check a conditional statement
+                # Explain this line: if attempt > self.max_retries:...
+                # Line: if attempt > self.max_retries:
                 if attempt > self.max_retries:
-                    # Assign a value or initialize a variable
+                    # Explain this line: err_msg = _parse_schwab_error(resp)...
+                    # Line: err_msg = _parse_schwab_error(resp)
                     err_msg = _parse_schwab_error(resp)
-                    # Raise an error to stop execution
+                    # Explain this line: raise APIRequestError(...
+                    # Line: raise APIRequestError(
                     raise APIRequestError(
-                        # Execute this line of logic to process the data
+                        # Explain this line: f"Persistent server failure (HTTP {resp....
+                        # Line: f"Persistent server failure (HTTP {resp.status_cod
                         f"Persistent server failure (HTTP {resp.status_code}). "
-                        # Execute this line of logic to process the data
+                        # Explain this line: f"CorrelId: {correl_id} | Details: {err_...
+                        # Line: f"CorrelId: {correl_id} | Details: {err_msg}",
                         f"CorrelId: {correl_id} | Details: {err_msg}",
-                        # Assign a value or initialize a variable
+                        # Explain this line: status_code=resp.status_code,...
+                        # Line: status_code=resp.status_code,
                         status_code=resp.status_code,
-                        # Assign a value or initialize a variable
+                        # Explain this line: correl_id=correl_id,...
+                        # Line: correl_id=correl_id,
                         correl_id=correl_id,
-                        # Assign a value or initialize a variable
+                        # Explain this line: error_details=err_msg,...
+                        # Line: error_details=err_msg,
                         error_details=err_msg,
-                    # Execute this line of logic to process the data
+                    # Explain this line: )...
+                    # Line: )
                     )
-                # Assign a value or initialize a variable
+                # Explain this line: backoff = DEFAULT_BACKOFF_FACTOR * (2 **...
+                # Line: backoff = DEFAULT_BACKOFF_FACTOR * (2 ** (attempt
                 backoff = DEFAULT_BACKOFF_FACTOR * (2 ** (attempt - 1))
-                # Execute this line of logic to process the data
+                # Explain this line: time.sleep(backoff)...
+                # Line: time.sleep(backoff)
                 time.sleep(backoff)
-                # Execute this line of logic to process the data
+                # Explain this line: continue...
+                # Line: continue
                 continue
 
-            # Return the final computed result to the caller
+            # Explain this line: return resp...
+            # Line: return resp
             return resp
 
-    # Define a new function or method
+    # Explain this line: def _execute_authenticated(...
+    # Line: def _execute_authenticated(
     def _execute_authenticated(
-        # Execute this line of logic to process the data
+        # Explain this line: self,...
+        # Line: self,
         self,
-        # Execute this line of logic to process the data
+        # Explain this line: endpoint_path: str,...
+        # Line: endpoint_path: str,
         endpoint_path: str,
-        # Assign a value or initialize a variable
+        # Explain this line: params: Optional[Dict[str, Any]] = None,...
+        # Line: params: Optional[Dict[str, Any]] = None,
         params: Optional[Dict[str, Any]] = None,
-    # Execute this line of logic to process the data
+    # Explain this line: ) -> Dict[str, Any]:...
+    # Line: ) -> Dict[str, Any]:
     ) -> Dict[str, Any]:
         """Base API handler with automatic 401 token recovery and diagnostic logging."""
-        # Assign a value or initialize a variable
+        # Explain this line: target_url = f"{MARKETDATA_BASE}{endpoin...
+        # Line: target_url = f"{MARKETDATA_BASE}{endpoint_path}"
         target_url = f"{MARKETDATA_BASE}{endpoint_path}"
 
-        # Start a loop over the given collection
+        # Explain this line: for is_recovery_attempt in (False, True)...
+        # Line: for is_recovery_attempt in (False, True):
         for is_recovery_attempt in (False, True):
-            # Assign a value or initialize a variable
+            # Explain this line: token = self.get_valid_access_token()...
+            # Line: token = self.get_valid_access_token()
             token = self.get_valid_access_token()
-            # Assign a value or initialize a variable
+            # Explain this line: headers = {"Authorization": f"Bearer {to...
+            # Line: headers = {"Authorization": f"Bearer {token}", "Ac
             headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
-            # Assign a value or initialize a variable
+            # Explain this line: resp = self._raw_http_request("GET", tar...
+            # Line: resp = self._raw_http_request("GET", target_url, h
             resp = self._raw_http_request("GET", target_url, headers=headers, params=params)
 
             # Self-healing on unexpected token invalidation
-            # Check a conditional statement
+            # Explain this line: if resp.status_code == 401 and not is_re...
+            # Line: if resp.status_code == 401 and not is_recovery_att
             if resp.status_code == 401 and not is_recovery_attempt:
-                # Assign a value or initialize a variable
+                # Explain this line: correl_id = resp.headers.get("Schwab-Cli...
+                # Line: correl_id = resp.headers.get("Schwab-Client-Correl
                 correl_id = resp.headers.get("Schwab-Client-CorrelId", "UNKNOWN")
-                # Log an important message or event
+                # Explain this line: logger.warning("HTTP 401 received (Corre...
+                # Line: logger.warning("HTTP 401 received (CorrelId: %s).
                 logger.warning("HTTP 401 received (CorrelId: %s). Forcing access token refresh.", correl_id)
-                # Execute this line of logic to process the data
+                # Explain this line: self.refresh_access_token()...
+                # Line: self.refresh_access_token()
                 self.refresh_access_token()
-                # Execute this line of logic to process the data
+                # Explain this line: continue...
+                # Line: continue
                 continue
 
-            # Check a conditional statement
+            # Explain this line: if resp.status_code != 200:...
+            # Line: if resp.status_code != 200:
             if resp.status_code != 200:
-                # Assign a value or initialize a variable
+                # Explain this line: correl_id = resp.headers.get("Schwab-Cli...
+                # Line: correl_id = resp.headers.get("Schwab-Client-Correl
                 correl_id = resp.headers.get("Schwab-Client-CorrelId", "UNKNOWN")
-                # Assign a value or initialize a variable
+                # Explain this line: version = resp.headers.get("Schwab-Resou...
+                # Line: version = resp.headers.get("Schwab-Resource-Versio
                 version = resp.headers.get("Schwab-Resource-Version", "1")
-                # Assign a value or initialize a variable
+                # Explain this line: err_msg = _parse_schwab_error(resp)...
+                # Line: err_msg = _parse_schwab_error(resp)
                 err_msg = _parse_schwab_error(resp)
 
-                # Raise an error to stop execution
+                # Explain this line: raise APIRequestError(...
+                # Line: raise APIRequestError(
                 raise APIRequestError(
-                    # Execute this line of logic to process the data
+                    # Explain this line: f"API request failed on {endpoint_path} ...
+                    # Line: f"API request failed on {endpoint_path} (HTTP {res
                     f"API request failed on {endpoint_path} (HTTP {resp.status_code}). "
-                    # Execute this line of logic to process the data
+                    # Explain this line: f"CorrelId: {correl_id} | Version: {vers...
+                    # Line: f"CorrelId: {correl_id} | Version: {version} | Det
                     f"CorrelId: {correl_id} | Version: {version} | Details: {err_msg}",
-                    # Assign a value or initialize a variable
+                    # Explain this line: status_code=resp.status_code,...
+                    # Line: status_code=resp.status_code,
                     status_code=resp.status_code,
-                    # Assign a value or initialize a variable
+                    # Explain this line: correl_id=correl_id,...
+                    # Line: correl_id=correl_id,
                     correl_id=correl_id,
-                    # Assign a value or initialize a variable
+                    # Explain this line: error_details=err_msg,...
+                    # Line: error_details=err_msg,
                     error_details=err_msg,
-                # Execute this line of logic to process the data
+                # Explain this line: )...
+                # Line: )
                 )
 
-            # Return the final computed result to the caller
+            # Explain this line: return _safe_json_parse(resp)...
+            # Line: return _safe_json_parse(resp)
             return _safe_json_parse(resp)
 
-        # Assign a value or initialize a variable
+        # Explain this line: correl_id = resp.headers.get("Schwab-Cli...
+        # Line: correl_id = resp.headers.get("Schwab-Client-Correl
         correl_id = resp.headers.get("Schwab-Client-CorrelId", "UNKNOWN")
-        # Raise an error to stop execution
+        # Explain this line: raise APIRequestError(...
+        # Line: raise APIRequestError(
         raise APIRequestError(
-            # Execute this line of logic to process the data
+            # Explain this line: f"Request failed after re-authentication...
+            # Line: f"Request failed after re-authentication recovery
             f"Request failed after re-authentication recovery attempt. CorrelId: {correl_id}",
-            # Assign a value or initialize a variable
+            # Explain this line: status_code=401,...
+            # Line: status_code=401,
             status_code=401,
-            # Assign a value or initialize a variable
+            # Explain this line: correl_id=correl_id,...
+            # Line: correl_id=correl_id,
             correl_id=correl_id,
-        # Execute this line of logic to process the data
+        # Explain this line: )...
+        # Line: )
         )
 
     # -----------------------------------------------------------------------
     # ALL 7 SCHWAB MARKET DATA ENDPOINT FAMILIES (FULLY PARAMETERIZED)
     # -----------------------------------------------------------------------
-    # Define a new function or method
+    # Explain this line: def get_quotes(...
+    # Line: def get_quotes(
     def get_quotes(
-        # Execute this line of logic to process the data
+        # Explain this line: self,...
+        # Line: self,
         self,
-        # Execute this line of logic to process the data
+        # Explain this line: symbols: Union[str, List[str]],...
+        # Line: symbols: Union[str, List[str]],
         symbols: Union[str, List[str]],
-        # Assign a value or initialize a variable
+        # Explain this line: fields: Optional[str] = None,...
+        # Line: fields: Optional[str] = None,
         fields: Optional[str] = None,
-    # Execute this line of logic to process the data
+    # Explain this line: ) -> Dict[str, Any]:...
+    # Line: ) -> Dict[str, Any]:
     ) -> Dict[str, Any]:
         """
-        # Execute this line of logic to process the data
         1. Quotes: Real-time/delayed quotes for single or multiple symbols.
-        # Execute this line of logic to process the data
         Parameters:
-            # Execute this line of logic to process the data
             symbols: Single ticker or list/comma-delimited tickers.
-            # Execute this line of logic to process the data
             fields: Comma-separated subset filter: 'quote,fundamental,extended,reference,regular'.
         """
-        # Check a conditional statement
+        # Explain this line: if isinstance(symbols, list):...
+        # Line: if isinstance(symbols, list):
         if isinstance(symbols, list):
-            # Assign a value or initialize a variable
+            # Explain this line: clean_syms = ",".join(str(s).strip().upp...
+            # Line: clean_syms = ",".join(str(s).strip().upper() for s
             clean_syms = ",".join(str(s).strip().upper() for s in symbols if str(s).strip())
-        # Execute this line of logic to process the data
+        # Explain this line: else:...
+        # Line: else:
         else:
-            # Assign a value or initialize a variable
+            # Explain this line: clean_syms = ",".join(str(s).strip().upp...
+            # Line: clean_syms = ",".join(str(s).strip().upper() for s
             clean_syms = ",".join(str(s).strip().upper() for s in str(symbols).split(",") if str(s).strip())
 
-        # Check a conditional statement
+        # Explain this line: if not clean_syms:...
+        # Line: if not clean_syms:
         if not clean_syms:
-            # Raise an error to stop execution
+            # Explain this line: raise ValueError("Parameter 'symbols' mu...
+            # Line: raise ValueError("Parameter 'symbols' must contain
             raise ValueError("Parameter 'symbols' must contain at least one valid ticker symbol.")
 
-        # Assign a value or initialize a variable
+        # Explain this line: params: Dict[str, Any] = {"symbols": cle...
+        # Line: params: Dict[str, Any] = {"symbols": clean_syms}
         params: Dict[str, Any] = {"symbols": clean_syms}
-        # Check a conditional statement
+        # Explain this line: if fields:...
+        # Line: if fields:
         if fields:
-            # Assign a value or initialize a variable
+            # Explain this line: params["fields"] = fields.strip()...
+            # Line: params["fields"] = fields.strip()
             params["fields"] = fields.strip()
-        # Assign a value or initialize a variable
+        # Explain this line: return self._execute_authenticated("/quo...
+        # Line: return self._execute_authenticated("/quotes", para
         return self._execute_authenticated("/quotes", params=params)
 
-    # Define a new function or method
+    # Explain this line: def get_quote(...
+    # Line: def get_quote(
     def get_quote(
-        # Execute this line of logic to process the data
+        # Explain this line: self,...
+        # Line: self,
         self,
-        # Execute this line of logic to process the data
+        # Explain this line: symbol: str,...
+        # Line: symbol: str,
         symbol: str,
-        # Assign a value or initialize a variable
+        # Explain this line: fields: Optional[str] = None,...
+        # Line: fields: Optional[str] = None,
         fields: Optional[str] = None,
-    # Execute this line of logic to process the data
+    # Explain this line: ) -> Dict[str, Any]:...
+    # Line: ) -> Dict[str, Any]:
     ) -> Dict[str, Any]:
         """
-        # Execute this line of logic to process the data
         Convenience method: Retrieves quote breakdown for a single isolated symbol.
         """
-        # Check a conditional statement
+        # Explain this line: if not symbol or not str(symbol).strip()...
+        # Line: if not symbol or not str(symbol).strip():
         if not symbol or not str(symbol).strip():
-            # Raise an error to stop execution
+            # Explain this line: raise ValueError("Parameter 'symbol' mus...
+            # Line: raise ValueError("Parameter 'symbol' must be a non
             raise ValueError("Parameter 'symbol' must be a non-empty string.")
 
-        # Assign a value or initialize a variable
+        # Explain this line: clean_sym = str(symbol).strip().upper()...
+        # Line: clean_sym = str(symbol).strip().upper()
         clean_sym = str(symbol).strip().upper()
-        # Assign a value or initialize a variable
+        # Explain this line: payload = self.get_quotes(symbols=clean_...
+        # Line: payload = self.get_quotes(symbols=clean_sym, field
         payload = self.get_quotes(symbols=clean_sym, fields=fields)
-        # Return the final computed result to the caller
+        # Explain this line: return payload.get(clean_sym, payload)...
+        # Line: return payload.get(clean_sym, payload)
         return payload.get(clean_sym, payload)
 
-    # Define a new function or method
+    # Explain this line: def get_price_history(...
+    # Line: def get_price_history(
     def get_price_history(
-        # Execute this line of logic to process the data
+        # Explain this line: self,...
+        # Line: self,
         self,
-        # Execute this line of logic to process the data
+        # Explain this line: symbol: str,...
+        # Line: symbol: str,
         symbol: str,
-        # Assign a value or initialize a variable
+        # Explain this line: period_type: str = "year",...
+        # Line: period_type: str = "year",
         period_type: str = "year",
-        # Assign a value or initialize a variable
+        # Explain this line: period: int = 1,...
+        # Line: period: int = 1,
         period: int = 1,
-        # Assign a value or initialize a variable
+        # Explain this line: frequency_type: str = "daily",...
+        # Line: frequency_type: str = "daily",
         frequency_type: str = "daily",
-        # Assign a value or initialize a variable
+        # Explain this line: frequency: int = 1,...
+        # Line: frequency: int = 1,
         frequency: int = 1,
-        # Assign a value or initialize a variable
+        # Explain this line: start_date: Optional[int] = None,...
+        # Line: start_date: Optional[int] = None,
         start_date: Optional[int] = None,
-        # Assign a value or initialize a variable
+        # Explain this line: end_date: Optional[int] = None,...
+        # Line: end_date: Optional[int] = None,
         end_date: Optional[int] = None,
-        # Assign a value or initialize a variable
+        # Explain this line: need_extended_hours: bool = False,...
+        # Line: need_extended_hours: bool = False,
         need_extended_hours: bool = False,
-    # Execute this line of logic to process the data
+    # Explain this line: ) -> Dict[str, Any]:...
+    # Line: ) -> Dict[str, Any]:
     ) -> Dict[str, Any]:
         """
-        # Execute this line of logic to process the data
         2. Price History: Historical OHLCV candle bars across custom time horizons.
-        # Execute this line of logic to process the data
         Parameters:
-            # Execute this line of logic to process the data
             symbol: Ticker symbol.
-            # Execute this line of logic to process the data
             period_type: 'day', 'month', 'year', or 'ytd'.
-            # Assign a value or initialize a variable
             period: Lookback units (e.g., period=20 with period_type='year' pulls 20 years).
-            # Execute this line of logic to process the data
             frequency_type: 'minute', 'daily', 'weekly', or 'monthly'.
-            # Execute this line of logic to process the data
             frequency: Frequency multiplier (e.g., 1 for 1-day candles, 5 for 5-minute candles).
-            # Execute this line of logic to process the data
             start_date: Start epoch in milliseconds.
-            # Execute this line of logic to process the data
             end_date: End epoch in milliseconds.
-            # Execute this line of logic to process the data
             need_extended_hours: Includes pre- and post-market trading sessions.
         """
-        # Check a conditional statement
+        # Explain this line: if not symbol or not str(symbol).strip()...
+        # Line: if not symbol or not str(symbol).strip():
         if not symbol or not str(symbol).strip():
-            # Raise an error to stop execution
+            # Explain this line: raise ValueError("Parameter 'symbol' mus...
+            # Line: raise ValueError("Parameter 'symbol' must be a non
             raise ValueError("Parameter 'symbol' must be a non-empty string.")
 
-        # Assign a value or initialize a variable
+        # Explain this line: params: Dict[str, Any] = {...
+        # Line: params: Dict[str, Any] = {
         params: Dict[str, Any] = {
-            # Execute this line of logic to process the data
+            # Explain this line: "symbol": str(symbol).strip().upper(),...
+            # Line: "symbol": str(symbol).strip().upper(),
             "symbol": str(symbol).strip().upper(),
-            # Execute this line of logic to process the data
+            # Explain this line: "periodType": period_type.lower(),...
+            # Line: "periodType": period_type.lower(),
             "periodType": period_type.lower(),
-            # Execute this line of logic to process the data
+            # Explain this line: "period": period,...
+            # Line: "period": period,
             "period": period,
-            # Execute this line of logic to process the data
+            # Explain this line: "frequencyType": frequency_type.lower(),...
+            # Line: "frequencyType": frequency_type.lower(),
             "frequencyType": frequency_type.lower(),
-            # Execute this line of logic to process the data
+            # Explain this line: "frequency": frequency,...
+            # Line: "frequency": frequency,
             "frequency": frequency,
-            # Execute this line of logic to process the data
+            # Explain this line: "needExtendedHoursData": str(need_extend...
+            # Line: "needExtendedHoursData": str(need_extended_hours).
             "needExtendedHoursData": str(need_extended_hours).lower(),
-        # Execute this line of logic to process the data
+        # Explain this line: }...
+        # Line: }
         }
-        # Check a conditional statement
+        # Explain this line: if start_date is not None:...
+        # Line: if start_date is not None:
         if start_date is not None:
-            # Assign a value or initialize a variable
+            # Explain this line: params["startDate"] = start_date...
+            # Line: params["startDate"] = start_date
             params["startDate"] = start_date
-        # Check a conditional statement
+        # Explain this line: if end_date is not None:...
+        # Line: if end_date is not None:
         if end_date is not None:
-            # Assign a value or initialize a variable
+            # Explain this line: params["endDate"] = end_date...
+            # Line: params["endDate"] = end_date
             params["endDate"] = end_date
-        # Assign a value or initialize a variable
+        # Explain this line: return self._execute_authenticated("/pri...
+        # Line: return self._execute_authenticated("/pricehistory"
         return self._execute_authenticated("/pricehistory", params=params)
 
-    # Define a new function or method
+    # Explain this line: def get_option_chain(...
+    # Line: def get_option_chain(
     def get_option_chain(
-        # Execute this line of logic to process the data
+        # Explain this line: self,...
+        # Line: self,
         self,
-        # Execute this line of logic to process the data
+        # Explain this line: symbol: str,...
+        # Line: symbol: str,
         symbol: str,
-        # Assign a value or initialize a variable
+        # Explain this line: contract_type: str = "ALL",...
+        # Line: contract_type: str = "ALL",
         contract_type: str = "ALL",
-        # Assign a value or initialize a variable
+        # Explain this line: strike_count: Optional[int] = None,...
+        # Line: strike_count: Optional[int] = None,
         strike_count: Optional[int] = None,
-        # Assign a value or initialize a variable
+        # Explain this line: include_underlying_quote: bool = True,...
+        # Line: include_underlying_quote: bool = True,
         include_underlying_quote: bool = True,
-        # Assign a value or initialize a variable
+        # Explain this line: strategy: str = "SINGLE",...
+        # Line: strategy: str = "SINGLE",
         strategy: str = "SINGLE",
-        # Assign a value or initialize a variable
+        # Explain this line: interval: Optional[float] = None,...
+        # Line: interval: Optional[float] = None,
         interval: Optional[float] = None,
-        # Assign a value or initialize a variable
+        # Explain this line: strike: Optional[float] = None,...
+        # Line: strike: Optional[float] = None,
         strike: Optional[float] = None,
-        # Assign a value or initialize a variable
+        # Explain this line: from_date: Optional[str] = None,...
+        # Line: from_date: Optional[str] = None,
         from_date: Optional[str] = None,
-        # Assign a value or initialize a variable
+        # Explain this line: to_date: Optional[str] = None,...
+        # Line: to_date: Optional[str] = None,
         to_date: Optional[str] = None,
-    # Execute this line of logic to process the data
+    # Explain this line: ) -> Dict[str, Any]:...
+    # Line: ) -> Dict[str, Any]:
     ) -> Dict[str, Any]:
         """
-        # Execute this line of logic to process the data
         3. Option Chains: Real-time strike matrix with implied volatility and Greeks.
-        # Execute this line of logic to process the data
         Parameters:
-            # Execute this line of logic to process the data
             symbol: Underlying ticker symbol.
-            # Execute this line of logic to process the data
             contract_type: 'CALL', 'PUT', or 'ALL'.
-            # Execute this line of logic to process the data
             strike_count: Number of strikes above/below ATM. Pass None for full unbounded chain.
-            # Execute this line of logic to process the data
             strategy: 'SINGLE', 'ANALYTICAL', 'COVERED', 'VERTICAL', etc.
-            # Execute this line of logic to process the data
             interval: Strike interval filter.
-            # Execute this line of logic to process the data
             strike: Exact strike price filter.
-            # Execute this line of logic to process the data
             from_date: Expiration filter start (YYYY-MM-DD).
-            # Execute this line of logic to process the data
             to_date: Expiration filter end (YYYY-MM-DD).
         """
-        # Check a conditional statement
+        # Explain this line: if not symbol or not str(symbol).strip()...
+        # Line: if not symbol or not str(symbol).strip():
         if not symbol or not str(symbol).strip():
-            # Raise an error to stop execution
+            # Explain this line: raise ValueError("Parameter 'symbol' mus...
+            # Line: raise ValueError("Parameter 'symbol' must be a non
             raise ValueError("Parameter 'symbol' must be a non-empty string.")
 
-        # Assign a value or initialize a variable
+        # Explain this line: params: Dict[str, Any] = {...
+        # Line: params: Dict[str, Any] = {
         params: Dict[str, Any] = {
-            # Execute this line of logic to process the data
+            # Explain this line: "symbol": str(symbol).strip().upper(),...
+            # Line: "symbol": str(symbol).strip().upper(),
             "symbol": str(symbol).strip().upper(),
-            # Execute this line of logic to process the data
+            # Explain this line: "contractType": contract_type.upper(),...
+            # Line: "contractType": contract_type.upper(),
             "contractType": contract_type.upper(),
-            # Execute this line of logic to process the data
+            # Explain this line: "includeUnderlyingQuote": str(include_un...
+            # Line: "includeUnderlyingQuote": str(include_underlying_q
             "includeUnderlyingQuote": str(include_underlying_quote).lower(),
-            # Execute this line of logic to process the data
+            # Explain this line: "strategy": strategy.upper(),...
+            # Line: "strategy": strategy.upper(),
             "strategy": strategy.upper(),
-        # Execute this line of logic to process the data
+        # Explain this line: }...
+        # Line: }
         }
-        # Check a conditional statement
+        # Explain this line: if strike_count is not None:...
+        # Line: if strike_count is not None:
         if strike_count is not None:
-            # Assign a value or initialize a variable
+            # Explain this line: params["strikeCount"] = strike_count...
+            # Line: params["strikeCount"] = strike_count
             params["strikeCount"] = strike_count
-        # Check a conditional statement
+        # Explain this line: if interval is not None:...
+        # Line: if interval is not None:
         if interval is not None:
-            # Assign a value or initialize a variable
+            # Explain this line: params["interval"] = interval...
+            # Line: params["interval"] = interval
             params["interval"] = interval
-        # Check a conditional statement
+        # Explain this line: if strike is not None:...
+        # Line: if strike is not None:
         if strike is not None:
-            # Assign a value or initialize a variable
+            # Explain this line: params["strike"] = strike...
+            # Line: params["strike"] = strike
             params["strike"] = strike
-        # Check a conditional statement
+        # Explain this line: if from_date:...
+        # Line: if from_date:
         if from_date:
-            # Assign a value or initialize a variable
+            # Explain this line: params["fromDate"] = from_date...
+            # Line: params["fromDate"] = from_date
             params["fromDate"] = from_date
-        # Check a conditional statement
+        # Explain this line: if to_date:...
+        # Line: if to_date:
         if to_date:
-            # Assign a value or initialize a variable
+            # Explain this line: params["toDate"] = to_date...
+            # Line: params["toDate"] = to_date
             params["toDate"] = to_date
 
-        # Assign a value or initialize a variable
+        # Explain this line: return self._execute_authenticated("/cha...
+        # Line: return self._execute_authenticated("/chains", para
         return self._execute_authenticated("/chains", params=params)
 
-    # Define a new function or method
+    # Explain this line: def get_option_expirations(self, symbol:...
+    # Line: def get_option_expirations(self, symbol: str) -> D
     def get_option_expirations(self, symbol: str) -> Dict[str, Any]:
         """
-        # Execute this line of logic to process the data
         4. Option Expiration Chain: Calendar list of active expiration dates and days-to-expiration (DTE).
-        # Execute this line of logic to process the data
         Parameters:
-            # Execute this line of logic to process the data
             symbol: Underlying ticker symbol.
         """
-        # Check a conditional statement
+        # Explain this line: if not symbol or not str(symbol).strip()...
+        # Line: if not symbol or not str(symbol).strip():
         if not symbol or not str(symbol).strip():
-            # Raise an error to stop execution
+            # Explain this line: raise ValueError("Parameter 'symbol' mus...
+            # Line: raise ValueError("Parameter 'symbol' must be a non
             raise ValueError("Parameter 'symbol' must be a non-empty string.")
 
-        # Return the final computed result to the caller
+        # Explain this line: return self._execute_authenticated(...
+        # Line: return self._execute_authenticated(
         return self._execute_authenticated(
-            # Execute this line of logic to process the data
+            # Explain this line: "/expirationchain",...
+            # Line: "/expirationchain",
             "/expirationchain",
-            # Assign a value or initialize a variable
+            # Explain this line: params={"symbol": str(symbol).strip().up...
+            # Line: params={"symbol": str(symbol).strip().upper()},
             params={"symbol": str(symbol).strip().upper()},
-        # Execute this line of logic to process the data
+        # Explain this line: )...
+        # Line: )
         )
 
-    # Define a new function or method
+    # Explain this line: def get_instruments(self, symbol: str, p...
+    # Line: def get_instruments(self, symbol: str, projection:
     def get_instruments(self, symbol: str, projection: str = "fundamental") -> Dict[str, Any]:
         """
-        # Execute this line of logic to process the data
         5. Instruments: Asset profiles, CUSIP identifiers, and fundamental balance sheet metrics.
-        # Execute this line of logic to process the data
         Parameters:
-            # Execute this line of logic to process the data
             symbol: Ticker symbol.
-            # Execute this line of logic to process the data
             projection: 'symbol-search', 'symbol-regex', 'desc-search', or 'fundamental'.
         """
-        # Check a conditional statement
+        # Explain this line: if not symbol or not str(symbol).strip()...
+        # Line: if not symbol or not str(symbol).strip():
         if not symbol or not str(symbol).strip():
-            # Raise an error to stop execution
+            # Explain this line: raise ValueError("Parameter 'symbol' mus...
+            # Line: raise ValueError("Parameter 'symbol' must be a non
             raise ValueError("Parameter 'symbol' must be a non-empty string.")
 
-        # Assign a value or initialize a variable
+        # Explain this line: params = {...
+        # Line: params = {
         params = {
-            # Execute this line of logic to process the data
+            # Explain this line: "symbol": str(symbol).strip().upper(),...
+            # Line: "symbol": str(symbol).strip().upper(),
             "symbol": str(symbol).strip().upper(),
-            # Execute this line of logic to process the data
+            # Explain this line: "projection": projection.lower(),...
+            # Line: "projection": projection.lower(),
             "projection": projection.lower(),
-        # Execute this line of logic to process the data
+        # Explain this line: }...
+        # Line: }
         }
-        # Assign a value or initialize a variable
+        # Explain this line: return self._execute_authenticated("/ins...
+        # Line: return self._execute_authenticated("/instruments",
         return self._execute_authenticated("/instruments", params=params)
 
-    # Define a new function or method
+    # Explain this line: def get_movers(...
+    # Line: def get_movers(
     def get_movers(
-        # Execute this line of logic to process the data
+        # Explain this line: self,...
+        # Line: self,
         self,
-        # Execute this line of logic to process the data
+        # Explain this line: index_symbol: str,...
+        # Line: index_symbol: str,
         index_symbol: str,
-        # Assign a value or initialize a variable
+        # Explain this line: sort_by: str = "VOLUME",...
+        # Line: sort_by: str = "VOLUME",
         sort_by: str = "VOLUME",
-        # Assign a value or initialize a variable
+        # Explain this line: frequency: int = 0,...
+        # Line: frequency: int = 0,
         frequency: int = 0,
-    # Execute this line of logic to process the data
+    # Explain this line: ) -> Dict[str, Any]:...
+    # Line: ) -> Dict[str, Any]:
     ) -> Dict[str, Any]:
         """
-        # Execute this line of logic to process the data
         6. Movers: Top market movers across benchmark indices ($SPX, $COMPX, $DJI).
-        # Execute this line of logic to process the data
         Parameters:
-            # Execute this line of logic to process the data
             index_symbol: Index ticker (e.g., '$SPX', '$COMPX', '$DJI'). Required; no default.
-            # Execute this line of logic to process the data
             sort_by: 'VOLUME', 'TRADES', 'PERCENT_CHANGE_UP', or 'PERCENT_CHANGE_DOWN'.
-            # Execute this line of logic to process the data
             frequency: 0 (all day) or interval minutes (1, 5, 10, 30, 60).
         """
-        # Check a conditional statement
+        # Explain this line: if not index_symbol or not str(index_sym...
+        # Line: if not index_symbol or not str(index_symbol).strip
         if not index_symbol or not str(index_symbol).strip():
-            # Raise an error to stop execution
+            # Explain this line: raise ValueError("Parameter 'index_symbo...
+            # Line: raise ValueError("Parameter 'index_symbol' must be
             raise ValueError("Parameter 'index_symbol' must be a non-empty string.")
 
-        # Assign a value or initialize a variable
+        # Explain this line: valid_indices = {"$SPX", "$COMPX", "$DJI...
+        # Line: valid_indices = {"$SPX", "$COMPX", "$DJI"}
         valid_indices = {"$SPX", "$COMPX", "$DJI"}
-        # Assign a value or initialize a variable
+        # Explain this line: target = str(index_symbol).strip().upper...
+        # Line: target = str(index_symbol).strip().upper()
         target = str(index_symbol).strip().upper()
-        # Check a conditional statement
+        # Explain this line: if target not in valid_indices:...
+        # Line: if target not in valid_indices:
         if target not in valid_indices:
-            # Raise an error to stop execution
+            # Explain this line: raise ValueError(f"index_symbol must be ...
+            # Line: raise ValueError(f"index_symbol must be one of {va
             raise ValueError(f"index_symbol must be one of {valid_indices}, got '{index_symbol}'")
 
-        # Assign a value or initialize a variable
+        # Explain this line: params = {"sort": sort_by.upper(), "freq...
+        # Line: params = {"sort": sort_by.upper(), "frequency": fr
         params = {"sort": sort_by.upper(), "frequency": frequency}
-        # Assign a value or initialize a variable
+        # Explain this line: encoded_index = urllib.parse.quote(targe...
+        # Line: encoded_index = urllib.parse.quote(target)
         encoded_index = urllib.parse.quote(target)
-        # Assign a value or initialize a variable
+        # Explain this line: return self._execute_authenticated(f"/mo...
+        # Line: return self._execute_authenticated(f"/movers/{enco
         return self._execute_authenticated(f"/movers/{encoded_index}", params=params)
 
-    # Define a new function or method
+    # Explain this line: def get_market_hours(self, markets: str ...
+    # Line: def get_market_hours(self, markets: str = "equity,
     def get_market_hours(self, markets: str = "equity,option") -> Dict[str, Any]:
         """
-        # Execute this line of logic to process the data
         7. Market Hours: Trading session windows across equity, option, bond, and forex markets.
-        # Execute this line of logic to process the data
         Parameters:
-            # Execute this line of logic to process the data
             markets: Comma-separated list ('equity', 'option', 'bond', 'forex').
         """
-        # Assign a value or initialize a variable
+        # Explain this line: return self._execute_authenticated("/mar...
+        # Line: return self._execute_authenticated("/markets", par
         return self._execute_authenticated("/markets", params={"markets": markets.lower().strip()})
 
     # -----------------------------------------------------------------------
     # RESOURCE MANAGEMENT
     # -----------------------------------------------------------------------
-    # Define a new function or method
+    # Explain this line: def close(self) -> None:...
+    # Line: def close(self) -> None:
     def close(self) -> None:
         """Gracefully tears down underlying HTTP session adapters and connections."""
-        # Start a try-catch block to handle potential errors
+        # Explain this line: try:...
+        # Line: try:
         try:
-            # Execute this line of logic to process the data
+            # Explain this line: self.session.close()...
+            # Line: self.session.close()
             self.session.close()
-        # Catch and handle an exception
+        # Explain this line: except Exception:...
+        # Line: except Exception:
         except Exception:
-            # Execute this line of logic to process the data
+            # Explain this line: pass...
+            # Line: pass
             pass
 
-    # Define a new function or method
+    # Explain this line: def __enter__(self) -> "SchwabClient":...
+    # Line: def __enter__(self) -> "SchwabClient":
     def __enter__(self) -> "SchwabClient":
-        # Return the final computed result to the caller
+        # Explain this line: return self...
+        # Line: return self
         return self
 
-    # Define a new function or method
+    # Explain this line: def __exit__(self, exc_type, exc_val, ex...
+    # Line: def __exit__(self, exc_type, exc_val, exc_tb) -> N
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        # Execute this line of logic to process the data
+        # Explain this line: self.close()...
+        # Line: self.close()
         self.close()
